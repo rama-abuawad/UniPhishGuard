@@ -1,0 +1,30 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>UniPhishGuard</title>
+  <script src="https://appsforoffice.microsoft.com/lib/1/hosted/office.js"></script>
+  <link rel="stylesheet" href="./taskpane.css">
+</head>
+<body>
+  <main class="shell">
+    <header class="header">
+      <div>
+        <p class="eyebrow">UniPhishGuard</p>
+        <h1>Email Risk Scan</h1>
+      </div>
+      <span id="connectionStatus" class="status">Ready</span>
+    </header>
+
+    <button id="scanButton" class="primary-button" type="button">Scan Email</button>
+
+    <section id="result" class="result" aria-live="polite">
+      <p class="empty">Open an email, then scan it for phishing indicators.</p>
+    </section>
+
+    <p id="runtimeNote" class="runtime-note" hidden></p>
+  </main>
+  <script src="./taskpane.js"></script>
+</body>
+</html>

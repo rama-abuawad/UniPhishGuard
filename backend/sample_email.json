@@ -1,0 +1,17 @@
+{
+  "subject": "Urgent password verification required",
+  "sender": {
+    "name": "IT Support",
+    "email": "it@university.edu"
+  },
+  "reply_to": "support@example.net",
+  "body": "Click http://192.168.1.10/login to verify your account.",
+  "headers": "Authentication-Results: spf=pass dkim=pass dmarc=fail",
+  "attachments": [
+    {
+      "name": "invoice.pdf.exe",
+      "content_type": "application/octet-stream",
+      "size": 42100
+    }
+  ]
+}

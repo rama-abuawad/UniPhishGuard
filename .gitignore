@@ -203,6 +203,12 @@ cython_debug/
 # Temporary file for partial code execution
 tempCodeRunnerFile.py
 
+# Node / Outlook add-in tooling
+node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
 # Ruff stuff:
 .ruff_cache/
 
