@@ -51,20 +51,37 @@ h1 {
   padding: 6px 8px;
 }
 
-.primary-button {
-  background: #1f6f5a;
+.actions {
+  display: grid;
+  gap: 8px;
+  grid-template-columns: 1fr auto;
+}
+
+.primary-button,
+.secondary-button {
   border: 0;
   border-radius: 8px;
-  color: #fff;
   cursor: pointer;
   font-size: 15px;
   font-weight: 700;
   min-height: 42px;
   padding: 10px 14px;
+}
+
+.primary-button {
+  background: #1f6f5a;
+  color: #fff;
   width: 100%;
 }
 
-.primary-button:disabled {
+.secondary-button {
+  background: #e8eef7;
+  border: 1px solid #cdd8ea;
+  color: #344257;
+}
+
+.primary-button:disabled,
+.secondary-button:disabled {
   cursor: progress;
   opacity: 0.65;
 }
@@ -84,6 +101,22 @@ h1 {
   border: 1px solid #d9e1ec;
   border-radius: 8px;
   padding: 14px;
+}
+
+.report.verdict-legitimate {
+  border-top: 5px solid #1f7a4d;
+}
+
+.report.verdict-suspicious {
+  border-top: 5px solid #c87816;
+}
+
+.report.verdict-phishing {
+  border-top: 5px solid #d45500;
+}
+
+.report.verdict-high {
+  border-top: 5px solid #c93232;
 }
 
 .verdict {
@@ -111,10 +144,108 @@ h1 {
   min-width: 64px;
 }
 
+.verdict-legitimate .score {
+  background: #e9f7ef;
+  color: #145c39;
+}
+
+.verdict-suspicious .score {
+  background: #fff4df;
+  color: #8a4f00;
+}
+
+.verdict-phishing .score {
+  background: #fff0e8;
+  color: #9b3e00;
+}
+
+.verdict-high .score {
+  background: #ffecec;
+  color: #9d1d1d;
+}
+
 .meta {
   color: #536174;
   font-size: 13px;
-  margin: 0 0 14px;
+  line-height: 1.45;
+  margin: 0 0 8px;
+}
+
+.summary-grid {
+  display: grid;
+  gap: 8px;
+  grid-template-columns: repeat(3, 1fr);
+  margin: 12px 0;
+}
+
+.meter-block {
+  margin: 10px 0;
+}
+
+.meter-row {
+  align-items: center;
+  color: #344257;
+  display: flex;
+  font-size: 12px;
+  justify-content: space-between;
+  margin-bottom: 5px;
+}
+
+.meter {
+  background: #e8eef7;
+  border-radius: 8px;
+  height: 9px;
+  overflow: hidden;
+}
+
+.meter-fill {
+  display: block;
+  height: 100%;
+}
+
+.risk-fill {
+  background: #4477b2;
+}
+
+.verdict-legitimate .risk-fill {
+  background: #1f7a4d;
+}
+
+.verdict-suspicious .risk-fill {
+  background: #c87816;
+}
+
+.verdict-phishing .risk-fill {
+  background: #d45500;
+}
+
+.verdict-high .risk-fill {
+  background: #c93232;
+}
+
+.ai-fill {
+  background: #2f6fb0;
+}
+
+.summary-item {
+  background: #f7f9fc;
+  border: 1px solid #d9e1ec;
+  border-radius: 8px;
+  padding: 8px;
+}
+
+.summary-label {
+  color: #637083;
+  display: block;
+  font-size: 11px;
+  margin-bottom: 4px;
+  text-transform: uppercase;
+}
+
+.summary-value {
+  display: block;
+  font-size: 16px;
+  font-weight: 800;
 }
 
 .section-title {
@@ -164,4 +295,55 @@ h1 {
   font-size: 12px;
   line-height: 1.4;
   margin: 14px 0 0;
+}
+
+.history-list {
+  display: grid;
+  gap: 8px;
+  margin: 0;
+  padding: 0;
+}
+
+.history-list li {
+  background: #fff;
+  border: 1px solid #d9e1ec;
+  border-radius: 8px;
+  list-style: none;
+  padding: 10px;
+}
+
+.history-title {
+  font-weight: 800;
+  margin: 0 0 4px;
+}
+
+.report-button {
+  background: #344257;
+  border: 0;
+  border-radius: 8px;
+  color: #fff;
+  cursor: pointer;
+  font-size: 14px;
+  font-weight: 800;
+  margin-top: 14px;
+  min-height: 40px;
+  padding: 10px 12px;
+  width: 100%;
+}
+
+.it-report {
+  background: #f7f9fc;
+  border: 1px solid #d9e1ec;
+  border-radius: 8px;
+  margin-top: 12px;
+  padding: 12px;
+}
+
+.report-summary {
+  background: #fff;
+  border-left: 4px solid #344257;
+  border-radius: 6px;
+  font-size: 13px;
+  line-height: 1.55;
+  padding: 10px;
 }

@@ -28,9 +28,23 @@ class Indicator(BaseModel):
 
 
 class EmailAnalysisResponse(BaseModel):
+    scan_id: int | None = None
+    scanned_at: str | None = None
     verdict: str
     risk_score: int = Field(ge=0, le=100)
     ai_prediction: str
     ai_confidence: float = Field(ge=0, le=1)
+    url_count: int = 0
+    attachment_count: int = 0
     indicators: list[Indicator]
     recommended_actions: list[str]
+
+
+class HistoryItem(BaseModel):
+    scan_id: int
+    scanned_at: str
+    subject: str
+    sender: str
+    verdict: str
+    risk_score: int
+    indicator_count: int

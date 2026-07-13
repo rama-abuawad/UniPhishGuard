@@ -1,13 +1,13 @@
 {
   "name": "uniphishguard-outlook-addin",
-  "version": "0.1.0",
+  "version": "1.0.0",
   "private": true,
   "description": "Outlook task-pane add-in for UniPhishGuard.",
   "scripts": {
     "certs": "office-addin-dev-certs install",
     "start": "http-server . -S -C %USERPROFILE%\\.office-addin-dev-certs\\localhost.crt -K %USERPROFILE%\\.office-addin-dev-certs\\localhost.key -p 3000 -c-1",
     "validate": "office-addin-manifest validate manifest.xml",
-    "sideload": "office-addin-debugging start manifest.xml desktop",
+    "sideload": "office-addin-debugging start manifest.xml desktop --no-debug",
     "stop": "office-addin-debugging stop manifest.xml"
   },
   "devDependencies": {

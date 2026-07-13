@@ -5,10 +5,9 @@
 - Keep backend code in `backend/`.
 - Keep Outlook add-in code in `outlook-addin/`.
 - Store shared project notes in `docs/`.
-- Use the API contract in `docs/API_CONTRACT.md` as the agreement between both
-  team members.
+- Use `docs/API_CONTRACT.md` so both parts send the same data.
 
-## Phase 2: Outlook Add-in Prototype
+## Phase 2: Outlook Add-in
 
 - Create a task-pane add-in.
 - Add a Scan Email button.
@@ -20,9 +19,9 @@
 - Build the FastAPI backend.
 - Create an email analysis endpoint.
 - Send email data from Outlook to FastAPI.
-- Return and display a temporary report in Outlook.
+- Return and display the scan report in Outlook.
 
-## Phase 4: Technical Email Analysis
+## Phase 4: Email Rule Checks
 
 - Detect sender and Reply-To mismatches.
 - Parse SPF, DKIM, and DMARC authentication results.
@@ -43,17 +42,18 @@
 - Assign verdicts: likely legitimate, suspicious, likely phishing, or high-risk
   phishing.
 
-## Phase 7: Explainable Report
+## Phase 7: Report
 
 - Display verdict, risk score, and AI confidence.
 - List detected indicators.
-- Show recommended security actions in the Outlook task pane.
+- Show recommended actions in the Outlook task pane.
 
 ## Phase 8: Data Storage
 
-- Save analysis results and history.
-- Avoid storing sensitive email content unless authorized.
-- Prefer storing metadata and derived indicators.
+- Save scan results and history.
+- Avoid storing sensitive email content unless allowed.
+- Prefer storing indicators instead of the full email.
+- Show recent scans from the Outlook task pane.
 
 ## Phase 9: Testing and Improvement
 
@@ -61,11 +61,11 @@
 - Measure false positives and false negatives.
 - Improve rules, weights, and model quality.
 
-## Phase 10: Security and Deployment
+## Phase 10: Security and Release
 
 - Use HTTPS.
 - Validate requests.
 - Restrict backend access to approved add-in clients.
 - Never execute attachments.
 - Test by sideloading first.
-- Request university approval before wider deployment.
+- Request university approval before sharing it widely.

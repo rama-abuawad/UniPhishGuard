@@ -1,12 +1,29 @@
 # UniPhishGuard Backend
 
-FastAPI service used by the Outlook add-in.
+FastAPI backend used by the Outlook add-in.
 
 ## Install
 
 ```powershell
 cd C:\Users\rama\UniPhishGuard\backend
 python -m pip install -r requirements.txt
+```
+
+## Train the ML Model
+
+```powershell
+python train_model.py
+```
+
+This trains a TF-IDF + Logistic Regression model from
+`data/training_emails.csv`, saves it as `app/email_model.joblib`, and writes
+test metrics to `app/model_metrics.json`.
+
+To rebuild the 1000-email generated dataset:
+
+```powershell
+python generate_training_data.py
+python train_model.py
 ```
 
 For tests:
@@ -30,7 +47,7 @@ http://127.0.0.1:8000/docs
 
 ## Run for Outlook Add-in Testing
 
-Use HTTPS when testing inside Outlook:
+Use HTTPS for Outlook testing:
 
 ```powershell
 .\run_https.ps1
@@ -54,7 +71,7 @@ For a quick health check:
 https://localhost:8000/health
 ```
 
-The HTTPS certificate files are created by:
+The certificate files are created by:
 
 ```powershell
 cd C:\Users\rama\UniPhishGuard\outlook-addin

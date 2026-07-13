@@ -4,9 +4,9 @@
 
 - Maintain `outlook-addin/`.
 - Build task-pane UI.
-- Extract email metadata with Office.js.
+- Extract email details with Office.js.
 - Send requests to the backend.
-- Render verdict, score, indicators, and recommended actions.
+- Show verdict, score, indicators, and actions.
 - Handle sideloading and Outlook testing.
 
 ## Team Member 2: Backend and Detection
@@ -23,4 +23,4 @@
 - Keep `docs/API_CONTRACT.md` updated.
 - Test phishing and legitimate scenarios together.
 - Agree on risk scoring changes before modifying weights.
-- Review privacy and university approval requirements before deployment.
+- Check privacy and university approval before sharing it widely.

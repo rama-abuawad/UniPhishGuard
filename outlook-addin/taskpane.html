@@ -17,10 +17,13 @@
       <span id="connectionStatus" class="status">Ready</span>
     </header>
 
-    <button id="scanButton" class="primary-button" type="button">Scan Email</button>
+    <div class="actions">
+      <button id="scanButton" class="primary-button" type="button">Scan Email</button>
+      <button id="historyButton" class="secondary-button" type="button">History</button>
+    </div>
 
     <section id="result" class="result" aria-live="polite">
-      <p class="empty">Open an email, then scan it for phishing indicators.</p>
+      <p class="empty">Open an email and scan it with UniPhishGuard.</p>
     </section>
 
     <p id="runtimeNote" class="runtime-note" hidden></p>

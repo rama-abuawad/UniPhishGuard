@@ -8,5 +8,4 @@ The manifest references local HTTPS icon URLs:
 - `https://localhost:3000/assets/icon-80.png`
 - `https://localhost:3000/assets/icon-128.png`
 
-Replace the placeholder PNG icons with university-approved artwork before
-production deployment.
+Replace these PNG icons with approved project icons if needed.

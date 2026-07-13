@@ -1,8 +1,7 @@
 # Outlook Add-in Testing
 
-Outlook add-ins are web apps loaded inside Outlook through a manifest. The
-`manifest.xml` file makes UniPhishGuard appear in Outlook as an add-in instead
-of a normal browser page.
+Outlook add-ins use web files, but Outlook loads them through `manifest.xml`.
+That is why we test the page in the browser first and then sideload it.
 
 ## 1. Install Backend Dependencies
 
@@ -11,7 +10,7 @@ cd C:\Users\rama\UniPhishGuard\backend
 python -m pip install -r requirements.txt
 ```
 
-## 2. Install Add-in Dependencies and Local HTTPS Certificates
+## 2. Install Add-in Dependencies and HTTPS Certificates
 
 ```powershell
 cd C:\Users\rama\UniPhishGuard\outlook-addin
@@ -19,8 +18,7 @@ npm install
 npm run certs
 ```
 
-Accept the certificate trust prompt if Windows asks. Outlook requires the task
-pane to load over HTTPS.
+Accept the certificate prompt if Windows asks. Outlook needs HTTPS.
 
 ## 3. Start the Backend Over HTTPS
 
@@ -49,8 +47,7 @@ confirm it shows `{"status":"ok"}`:
 https://localhost:8000/health
 ```
 
-This confirms the backend is running and the local HTTPS certificate is trusted
-by the same browser engine Outlook uses.
+This checks that the backend is running and Edge trusts the local certificate.
 
 ## 4. Start the Add-in HTTPS Server
 
@@ -85,8 +82,10 @@ cd C:\Users\rama\UniPhishGuard\outlook-addin
 npm run sideload
 ```
 
-If automated sideloading does not work with your Outlook version, manually
-sideload `outlook-addin/manifest.xml` from Outlook's add-in management page.
+This starts the add-in without the debug popup.
+
+If this command does not work, manually sideload `outlook-addin/manifest.xml`
+from Outlook's add-in page.
 
 ## Expected Add-in Flow
 
@@ -95,13 +94,11 @@ sideload `outlook-addin/manifest.xml` from Outlook's add-in management page.
 3. Click UniPhishGuard or Scan Email from the message read ribbon.
 4. The task pane opens inside Outlook.
 5. Click Scan Email.
-6. UniPhishGuard sends the email metadata to `https://localhost:8000`.
-7. The task pane shows the verdict, risk score, indicators, and recommended
-   actions.
+6. UniPhishGuard sends the email details to `https://localhost:8000`.
+7. The task pane shows the verdict, risk score, indicators, and actions.
 
 ## Important Notes
 
 - Keep both servers running while testing.
 - The backend and task pane must use HTTPS for real Outlook testing.
-- Browser fallback testing is still possible by opening the task pane directly,
-  but the final demo should happen inside Outlook.
+- Browser testing is useful, but the final demo should be inside Outlook.

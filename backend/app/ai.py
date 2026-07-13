@@ -1,27 +1,31 @@
+from pathlib import Path
+
+import joblib
 from .models import EmailAnalysisRequest
 
 
-PHISHING_KEYWORDS = {
-    "urgent",
-    "verify",
-    "password",
-    "suspended",
-    "limited",
-    "click",
-    "login",
-    "account",
-    "payment",
-    "invoice",
-}
+MODEL_PATH = Path(__file__).with_name("email_model.joblib")
+_MODEL = None
+
+
+def _load_model():
+    global _MODEL
+    if _MODEL is None:
+        if not MODEL_PATH.exists():
+            raise FileNotFoundError(
+                    "Email AI model is missing. Run 'python train_model.py' in the backend folder."
+            )
+        _MODEL = joblib.load(MODEL_PATH)
+    return _MODEL
 
 
 def predict_email_risk(email: EmailAnalysisRequest) -> tuple[str, float]:
-    """Temporary keyword-based stand-in for the future trained model."""
-    text = f"{email.subject} {email.body}".lower()
-    hits = sum(1 for keyword in PHISHING_KEYWORDS if keyword in text)
+    model = _load_model()
+    text = f"{email.subject} {email.body}"
+    prediction = str(model.predict([text])[0])
 
-    if hits >= 4:
-        return "phishing", 0.78
-    if hits >= 2:
-        return "phishing", 0.62
-    return "legitimate", 0.58
+    probabilities = model.predict_proba([text])[0]
+    classes = list(model.classes_)
+    confidence = float(probabilities[classes.index(prediction)])
+
+    return prediction, round(confidence, 2)

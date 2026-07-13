@@ -10,6 +10,11 @@ from .models import EmailAnalysisRequest, EmailAnalysisResponse, Indicator
 
 
 URL_RE = re.compile(r"https?://[^\s<>\"]+", re.IGNORECASE)
+TRUSTED_DOMAINS = {
+    "adu.ac.ae",
+    "info.adu.ac.ae",
+    "students.adu.ac.ae",
+}
 HIGH_RISK_EXTENSIONS = {
     ".exe",
     ".scr",
@@ -25,6 +30,7 @@ HIGH_RISK_EXTENSIONS = {
 
 def analyze_email(email: EmailAnalysisRequest) -> EmailAnalysisResponse:
     indicators: list[Indicator] = []
+    url_count = _count_urls(email.body)
 
     indicators.extend(_check_sender_reply_to(email))
     indicators.extend(_check_authentication_results(email.headers))
@@ -32,12 +38,13 @@ def analyze_email(email: EmailAnalysisRequest) -> EmailAnalysisResponse:
     indicators.extend(_check_attachments(email))
 
     ai_prediction, ai_confidence = predict_email_risk(email)
-    if ai_prediction == "phishing":
+    trusted_context = _has_trusted_university_context(email)
+    if ai_prediction == "phishing" and not trusted_context:
         indicators.append(
             Indicator(
                 code="ai_phishing_signal",
                 severity="medium",
-                message="The prototype AI classifier found phishing-like language.",
+                message="AI text analysis found phishing-like wording.",
             )
         )
 
@@ -47,6 +54,8 @@ def analyze_email(email: EmailAnalysisRequest) -> EmailAnalysisResponse:
         risk_score=score,
         ai_prediction=ai_prediction,
         ai_confidence=ai_confidence,
+        url_count=url_count,
+        attachment_count=len(email.attachments),
         indicators=indicators,
         recommended_actions=_recommended_actions(score, indicators),
     )
@@ -61,7 +70,7 @@ def _check_sender_reply_to(email: EmailAnalysisRequest) -> list[Indicator]:
             Indicator(
                 code="reply_to_mismatch",
                 severity="medium",
-                message="Reply-To domain does not match the sender domain.",
+                message="Reply-To domain is different from the sender domain.",
             )
         ]
     return []
@@ -77,7 +86,7 @@ def _check_authentication_results(headers: str) -> list[Indicator]:
                 Indicator(
                     code=f"{protocol}_failed",
                     severity="high" if protocol == "dmarc" else "medium",
-                    message=f"{protocol.upper()} authentication did not pass.",
+                    message=f"{protocol.upper()} check did not pass.",
                 )
             )
 
@@ -86,7 +95,7 @@ def _check_authentication_results(headers: str) -> list[Indicator]:
             Indicator(
                 code="auth_results_missing",
                 severity="low",
-                message="Authentication-Results header was not found in the provided headers.",
+                message="Authentication-Results header was not found.",
             )
         )
 
@@ -101,12 +110,14 @@ def _check_urls(body: str) -> list[Indicator]:
     for url in urls:
         parsed = urlparse(url.rstrip(".,);]"))
         host = parsed.hostname or ""
+        if _is_trusted_domain(host):
+            continue
         if _is_ip_address(host):
             indicators.append(
                 Indicator(
                     code="url_uses_ip_address",
                     severity="high",
-                    message=f"URL uses an IP address instead of a recognizable domain: {host}",
+                    message=f"URL uses an IP address instead of a normal domain: {host}",
                 )
             )
         elif host.count("-") >= 2 or len(host) > 45:
@@ -123,11 +134,16 @@ def _check_urls(body: str) -> list[Indicator]:
             Indicator(
                 code="many_urls",
                 severity="low",
-                message="Email contains many links, which can increase phishing risk.",
+                message="Email has many links.",
             )
         )
 
     return indicators
+
+
+def _count_urls(body: str) -> int:
+    text = _strip_html(body or "")
+    return len(set(URL_RE.findall(f"{body} {text}")))
 
 
 def _check_attachments(email: EmailAnalysisRequest) -> list[Indicator]:
@@ -156,11 +172,12 @@ def _check_attachments(email: EmailAnalysisRequest) -> list[Indicator]:
 
 
 def _score(indicators: list[Indicator], ai_prediction: str, ai_confidence: float) -> int:
+    # Basic weights used for the final score.
     severity_weights = {"low": 8, "medium": 18, "high": 30}
     score = sum(severity_weights.get(indicator.severity, 0) for indicator in indicators)
 
     if ai_prediction == "phishing":
-        score += round(25 * ai_confidence)
+        score += round(16 * ai_confidence)
 
     return max(0, min(score, 100))
 
@@ -177,15 +194,15 @@ def _verdict(score: int) -> str:
 
 def _recommended_actions(score: int, indicators: list[Indicator]) -> list[str]:
     if score < 25:
-        return ["No major phishing indicators were detected. Continue normal caution."]
+        return ["No major phishing signs were found. Still be careful."]
 
     actions = [
-        "Do not click links or open attachments until the sender is verified.",
-        "Verify the message through an official university channel.",
+        "Do not click links or open attachments yet.",
+        "Check the sender using an official university channel.",
     ]
 
     if any(indicator.severity == "high" for indicator in indicators):
-        actions.append("Report the email to the university security or IT team.")
+        actions.append("Report the email to the university IT team.")
 
     return actions
 
@@ -195,6 +212,30 @@ def _domain_from_address(address: str) -> str:
     if "@" not in parsed:
         return ""
     return parsed.rsplit("@", 1)[1].lower().strip()
+
+
+def _has_trusted_university_context(email: EmailAnalysisRequest) -> bool:
+    sender_domain = _domain_from_address(str(email.sender.email))
+    if _is_trusted_domain(sender_domain):
+        return True
+
+    hosts = _url_hosts(email.body)
+    return bool(hosts) and all(_is_trusted_domain(host) for host in hosts)
+
+
+def _url_hosts(body: str) -> set[str]:
+    text = _strip_html(body or "")
+    hosts = set()
+    for url in set(URL_RE.findall(f"{body} {text}")):
+        parsed = urlparse(url.rstrip(".,);]"))
+        if parsed.hostname:
+            hosts.add(parsed.hostname.lower())
+    return hosts
+
+
+def _is_trusted_domain(host: str) -> bool:
+    host = (host or "").lower().strip()
+    return any(host == domain or host.endswith(f".{domain}") for domain in TRUSTED_DOMAINS)
 
 
 def _is_ip_address(host: str) -> bool:

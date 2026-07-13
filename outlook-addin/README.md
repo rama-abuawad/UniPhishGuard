@@ -1,13 +1,13 @@
 # UniPhishGuard Outlook Add-in
 
-This folder contains the Outlook task-pane add-in.
+This folder has the Outlook add-in files.
 
-## What Makes It an Outlook Add-in
+## Main Files
 
-- `manifest.xml` tells Outlook where the add-in appears.
-- `taskpane.html` is loaded inside Outlook's side panel.
-- `taskpane.js` uses Office.js to read the currently opened email.
-- The task pane sends email metadata to the FastAPI backend.
+- `manifest.xml` tells Outlook how to load the add-in.
+- `taskpane.html` is the side panel page.
+- `taskpane.js` reads the opened email with Office.js.
+- The task pane sends the email details to the backend.
 
 ## Install Tooling
 
@@ -35,5 +35,8 @@ https://localhost:3000/taskpane.html
 npm run validate
 npm run sideload
 ```
+
+The sideload command uses `--no-debug`, so Outlook should not show the debug
+handler popup each time.
 
 Keep the backend running at `https://localhost:8000` while testing.

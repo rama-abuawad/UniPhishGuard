@@ -209,6 +209,10 @@ npm-debug.log*
 yarn-debug.log*
 yarn-error.log*
 
+# Local UniPhishGuard scan data
+backend/data/*.db
+backend/*.db
+
 # Ruff stuff:
 .ruff_cache/
 

@@ -1,41 +1,42 @@
 # UniPhishGuard
 
-AI-powered phishing detection system for university email environments.
+Phishing detection add-in for university email environments.
 
-UniPhishGuard is built as an Outlook task-pane add-in connected to a FastAPI
-backend. The add-in extracts safe metadata from the opened email, sends it to
-the backend, and displays an explainable phishing risk report.
+UniPhishGuard is an Outlook add-in connected to a FastAPI backend. It sends
+details from the opened email to the backend and shows a phishing risk report.
 
 ## Repository Structure
 
 ```text
-backend/          FastAPI API, phishing checks, scoring, and future AI model code
-outlook-addin/    Outlook task-pane UI, Office.js email extraction, manifest
-docs/             Roadmap, API contract, and team responsibilities
+backend/          FastAPI backend and phishing checks
+outlook-addin/    Outlook add-in UI and manifest
+docs/             Roadmap and setup notes
 ```
 
-## Current Prototype Flow
+## Current Flow
 
 ```text
 Outlook Email
   -> Scan with UniPhishGuard
-  -> Extract email information
+  -> Read email details
   -> Send to FastAPI
-  -> Technical analysis + AI placeholder
+  -> Rule checks + AI text prediction
   -> Risk score and verdict
   -> Display report in Outlook
 ```
 
 ## Features
 
-- Outlook task-pane prototype with a Scan Email button
+- Outlook add-in with a Scan Email button
 - Subject, sender, body, header, and attachment extraction
 - FastAPI `/analyze-email` endpoint
 - Sender and Reply-To mismatch checks
 - SPF, DKIM, and DMARC result parsing
 - URL and attachment indicator analysis
-- Explainable risk score and verdict
-- Placeholder AI module ready for a trained classifier
+- Risk score and verdict
+- AI text prediction with confidence score
+- Scan history without storing the full email body
+- Local SQLite storage for scan results
 
 ## Quick Start
 
@@ -51,10 +52,21 @@ uvicorn app.main:app --reload --port 8000
 
 Open `http://127.0.0.1:8000/docs` to test the API.
 
+Train or retrain the AI text model:
+
+```powershell
+cd backend
+python train_model.py
+```
+
+The training data is in `backend/data/training_emails.csv`. It has 1000 labeled
+emails generated from university and phishing templates. Training metrics are
+saved to `backend/app/model_metrics.json`.
+
 ### Outlook Add-in
 
-The add-in files live in `outlook-addin/`. For local development, serve this
-folder over HTTPS and sideload `outlook-addin/manifest.xml` in Outlook.
+The add-in files are in `outlook-addin/`. For local testing, serve this folder
+over HTTPS and sideload `outlook-addin/manifest.xml` in Outlook.
 
 See `docs/OUTLOOK_SIDELOADING.md` for the full Outlook testing flow.
 
@@ -84,4 +96,4 @@ npm run sideload
 
 ## Status
 
-Initial prototype scaffold is ready for local integration testing.
+Final local version is ready for Outlook testing.

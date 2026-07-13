@@ -1,0 +1,46 @@
+{
+  "dataset_size": 1000,
+  "train_size": 750,
+  "test_size": 250,
+  "labels": [
+    "legitimate",
+    "phishing"
+  ],
+  "classification_report": {
+    "legitimate": {
+      "precision": 1.0,
+      "recall": 1.0,
+      "f1-score": 1.0,
+      "support": 125.0
+    },
+    "phishing": {
+      "precision": 1.0,
+      "recall": 1.0,
+      "f1-score": 1.0,
+      "support": 125.0
+    },
+    "accuracy": 1.0,
+    "macro avg": {
+      "precision": 1.0,
+      "recall": 1.0,
+      "f1-score": 1.0,
+      "support": 250.0
+    },
+    "weighted avg": {
+      "precision": 1.0,
+      "recall": 1.0,
+      "f1-score": 1.0,
+      "support": 250.0
+    }
+  },
+  "confusion_matrix": [
+    [
+      125,
+      0
+    ],
+    [
+      0,
+      125
+    ]
+  ]
+}
