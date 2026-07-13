@@ -1,7 +1,11 @@
 {
-  "dataset_size": 1000,
-  "train_size": 750,
-  "test_size": 250,
+  "dataset_size": 11000,
+  "sources": {
+    "generated_university_examples": "data\\training_emails.csv",
+    "kd_10000_dataset": "data\\phishing_legit_dataset_KD_10000.csv"
+  },
+  "train_size": 8250,
+  "test_size": 2750,
   "labels": [
     "legitimate",
     "phishing"
@@ -11,36 +15,36 @@
       "precision": 1.0,
       "recall": 1.0,
       "f1-score": 1.0,
-      "support": 125.0
+      "support": 1125.0
     },
     "phishing": {
       "precision": 1.0,
       "recall": 1.0,
       "f1-score": 1.0,
-      "support": 125.0
+      "support": 1625.0
     },
     "accuracy": 1.0,
     "macro avg": {
       "precision": 1.0,
       "recall": 1.0,
       "f1-score": 1.0,
-      "support": 250.0
+      "support": 2750.0
     },
     "weighted avg": {
       "precision": 1.0,
       "recall": 1.0,
       "f1-score": 1.0,
-      "support": 250.0
+      "support": 2750.0
     }
   },
   "confusion_matrix": [
     [
-      125,
+      1125,
       0
     ],
     [
       0,
-      125
+      1625
     ]
   ]
 }

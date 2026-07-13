@@ -1,10 +1,16 @@
 # Model Training Data
 
-`training_emails.csv` contains the labeled examples used to train the local
-phishing text classifier. It currently has 1000 generated training emails:
+The model is trained from two CSV files in this folder.
+
+`training_emails.csv` contains 1000 generated university-style training emails:
 
 - 500 legitimate
 - 500 phishing
+
+`phishing_legit_dataset_KD_10000.csv` adds 10000 more labeled emails:
+
+- label `0` = legitimate
+- label `1` = phishing
 
 The current model uses:
 
@@ -12,9 +18,9 @@ The current model uses:
 - Logistic Regression classifier
 - labels: `phishing` and `legitimate`
 
-The dataset is generated from university-email and phishing-email templates in
-`backend/generate_training_data.py`. For real deployment, replace or extend it
-with real approved datasets.
+The first dataset is generated from university-email and phishing-email
+templates in `backend/generate_training_data.py`. The second dataset is used to
+make the text model less dependent on only our generated examples.
 
 Retrain after changing the dataset:
 
