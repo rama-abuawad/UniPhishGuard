@@ -27,16 +27,64 @@ Outlook Email
 
 ## Features
 
-- Outlook add-in with a Scan Email button
-- Subject, sender, body, header, and attachment extraction
+### Outlook Add-in
+
+- Outlook task pane with a Scan Email button
+- Reads the opened email subject, sender, Reply-To, body, headers, links, and attachments
+- Browser preview mode with sample email data for quick testing
+- Report to IT summary generator inside the task pane
+- Scan history view for recent email checks
+
+### Backend Analysis
+
 - FastAPI `/analyze-email` endpoint
-- Sender and Reply-To mismatch checks
-- SPF, DKIM, and DMARC result parsing
-- URL and attachment indicator analysis
-- Risk score and verdict
+- Rule-based phishing indicators
 - AI text prediction with confidence score
-- Scan history without storing the full email body
-- Local SQLite storage for scan results
+- Sender and Reply-To mismatch detection
+- SPF, DKIM, and DMARC authentication parsing
+- Clear authentication warnings, including user-friendly DKIM explanations
+- Suspicious URL checks, including IP-address links and unusual domains
+- Attachment checks for dangerous extensions and double-extension files
+- Local SQLite scan history without storing full email bodies
+
+### Phishing Category Detection
+
+- Credential Theft
+- Business Email Compromise
+- Scholarship Scam
+- Internship Scam
+- Fake HR
+- Invoice Scam
+- Malware Delivery
+- Microsoft Login Scam
+
+Categories are only shown when there is real suspicious context, so normal
+emails that mention words like internship, scholarship, HR, or Microsoft 365 are
+not marked suspicious just because of those keywords.
+
+### University-Specific Detection
+
+- Trusted university and Microsoft domain whitelist
+- ADU domain checks for `adu.ac.ae`, `info.adu.ac.ae`, and `students.adu.ac.ae`
+- ADU SharePoint/OneDrive link trust for legitimate student file links
+- Fake ADU lookalike detection, such as `adu-help.com` or `aduniversity-login.com`
+- Fake campus-service detection for:
+  - HR
+  - Student Affairs
+  - IT Helpdesk
+  - Blackboard
+  - Microsoft 365
+  - Scholarships
+  - Internships
+
+### Threat Level Meter
+
+- Safe
+- Suspicious
+- High Risk
+- Critical
+- Colored risk gauge in the Outlook task pane
+- Risk score remains visible as a number out of 100
 
 ## Quick Start
 
@@ -94,4 +142,6 @@ npm run validate
 npm run sideload
 ```
 
+## Status
 
+Final local version is ready for Outlook testing.
