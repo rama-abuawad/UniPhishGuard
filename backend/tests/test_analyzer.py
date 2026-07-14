@@ -3,7 +3,7 @@ from uuid import uuid4
 
 from app.analyzer import analyze_email
 from app import db
-from app.models import EmailAnalysisRequest, EmailAddress
+from app.models import AttachmentInfo, EmailAnalysisRequest, EmailAddress
 
 
 def test_flags_high_risk_email() -> None:
@@ -81,6 +81,35 @@ def test_keywords_alone_do_not_make_email_suspicious() -> None:
     assert result.verdict == "Likely legitimate"
     assert result.threat_categories == []
     assert all(indicator.code != "ai_phishing_signal" for indicator in result.indicators)
+
+
+def test_external_internship_schedule_email_stays_legitimate() -> None:
+    result = analyze_email(
+        EmailAnalysisRequest(
+            subject="Internship Visit Schedule Reminder",
+            sender=EmailAddress(name="Prosper Yeng", email="prosper@example.com"),
+            reply_to="prosper@example.com",
+            body=(
+                "Dear Internship Students, I hope you are doing well at your internship placements. "
+                "Please provide contacts of your company supervisors in the excel sheet and add "
+                "the google map locations to your companies. The form url remains: "
+                "https://example.com/Summer-2506-Internship-Visit-Schedule.xlsx"
+            ),
+            headers="Authentication-Results: spf=pass dkim=pass dmarc=pass",
+            attachments=[
+                AttachmentInfo(
+                    name="Summer 2506 Internship Visit Schedule.xlsx",
+                    content_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                    size=35000,
+                )
+            ],
+        )
+    )
+
+    assert result.risk_score < 25
+    assert result.verdict == "Likely legitimate"
+    assert result.threat_categories == []
+    assert result.indicators == []
 
 
 def test_detects_university_domain_impersonation_and_categories() -> None:

@@ -280,7 +280,7 @@ def _check_university_impersonation(email: EmailAnalysisRequest) -> list[Indicat
     if (
         impersonated_services
         and not _has_trusted_university_context(email)
-        and (suspicious_domains or has_untrusted_brand or _has_account_action_terms(text) or _has_untrusted_links(email))
+        and (suspicious_domains or has_untrusted_brand or _has_account_action_terms(text))
     ):
         indicators.append(
             Indicator(
@@ -401,10 +401,6 @@ def _has_account_action_terms(text: str) -> bool:
         "confirm your account",
     )
     return any(term in text for term in action_terms)
-
-
-def _has_untrusted_links(email: EmailAnalysisRequest) -> bool:
-    return any(not _is_trusted_domain(host) for host in _url_hosts(email.body))
 
 
 def _score(
