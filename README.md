@@ -141,7 +141,3 @@ cd outlook-addin
 npm run validate
 npm run sideload
 ```
-
-## Status
-
-Final local version is ready for Outlook testing.
