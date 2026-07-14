@@ -112,6 +112,23 @@ def test_external_internship_schedule_email_stays_legitimate() -> None:
     assert result.indicators == []
 
 
+def test_dkim_warning_is_clear_to_user() -> None:
+    result = analyze_email(
+        EmailAnalysisRequest(
+            subject="Project update",
+            sender=EmailAddress(name="Instructor", email="instructor@university.edu"),
+            reply_to="instructor@university.edu",
+            body="Please review the project update before class.",
+            headers="Authentication-Results: spf=pass dkim=fail dmarc=pass",
+            attachments=[],
+        )
+    )
+
+    dkim_indicator = next(indicator for indicator in result.indicators if indicator.code == "dkim_failed")
+    assert "email signature could not be verified" in dkim_indicator.message
+    assert "forwarding or sender setup issues" in dkim_indicator.message
+
+
 def test_detects_university_domain_impersonation_and_categories() -> None:
     result = analyze_email(
         EmailAnalysisRequest(

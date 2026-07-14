@@ -98,6 +98,14 @@ HIGH_RISK_EXTENSIONS = {
     ".iso",
     ".lnk",
 }
+AUTH_FAILURE_MESSAGES = {
+    "spf": "SPF warning: the sending server was not approved for this sender domain.",
+    "dkim": (
+        "DKIM warning: the email signature could not be verified. "
+        "This can happen with forwarding or sender setup issues, but be careful if the email asks for links, files, or personal information."
+    ),
+    "dmarc": "DMARC warning: the sender domain did not pass the main anti-spoofing policy.",
+}
 
 
 def analyze_email(email: EmailAnalysisRequest) -> EmailAnalysisResponse:
@@ -163,7 +171,7 @@ def _check_authentication_results(headers: str) -> list[Indicator]:
                 Indicator(
                     code=f"{protocol}_failed",
                     severity="high" if protocol == "dmarc" else "medium",
-                    message=f"{protocol.upper()} check did not pass.",
+                    message=AUTH_FAILURE_MESSAGES[protocol],
                 )
             )
 
