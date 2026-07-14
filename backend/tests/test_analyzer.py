@@ -93,7 +93,7 @@ def test_external_internship_schedule_email_stays_legitimate() -> None:
                 "Dear Internship Students, I hope you are doing well at your internship placements. "
                 "Please provide contacts of your company supervisors in the excel sheet and add "
                 "the google map locations to your companies. The form url remains: "
-                "https://example.com/Summer-2506-Internship-Visit-Schedule.xlsx"
+                "https://studentsaduac-my.sharepoint.com/Summer-2506-Internship-Visit-Schedule.xlsx"
             ),
             headers="Authentication-Results: spf=pass dkim=pass dmarc=pass",
             attachments=[

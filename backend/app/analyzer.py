@@ -14,8 +14,12 @@ URL_RE = re.compile(r"https?://[^\s<>\"]+", re.IGNORECASE)
 # Trusted ADU and Microsoft domains.
 TRUSTED_DOMAINS = {
     "adu.ac.ae",
+    "aduac-my.sharepoint.com",
+    "aduac.sharepoint.com",
     "info.adu.ac.ae",
     "students.adu.ac.ae",
+    "studentsaduac-my.sharepoint.com",
+    "studentsaduac.sharepoint.com",
     "university.edu",
     "office.com",
     "microsoft.com",
@@ -247,6 +251,7 @@ def _check_attachments(email: EmailAnalysisRequest) -> list[Indicator]:
 def _check_university_impersonation(email: EmailAnalysisRequest) -> list[Indicator]:
     indicators: list[Indicator] = []
     text = _email_text(email)
+    text_without_urls = URL_RE.sub(" ", text)
     sender_domain = _domain_from_address(str(email.sender.email))
     hosts = _url_hosts(email.body)
 
@@ -266,7 +271,9 @@ def _check_university_impersonation(email: EmailAnalysisRequest) -> list[Indicat
             )
         )
 
-    has_untrusted_brand = not _is_trusted_domain(sender_domain) and any(term in text for term in UNIVERSITY_BRAND_TERMS)
+    has_untrusted_brand = not _is_trusted_domain(sender_domain) and any(
+        term in text_without_urls for term in UNIVERSITY_BRAND_TERMS
+    )
     if has_untrusted_brand:
         indicators.append(
             Indicator(
