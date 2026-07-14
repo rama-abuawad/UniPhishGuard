@@ -62,6 +62,30 @@ def test_adu_tuition_email_is_not_marked_phishing() -> None:
     assert result.ai_prediction == "legitimate"
 
 
+def test_detects_university_domain_impersonation_and_categories() -> None:
+    result = analyze_email(
+        EmailAnalysisRequest(
+            subject="ADU IT Helpdesk Microsoft 365 password reset",
+            sender=EmailAddress(name="ADU IT Helpdesk", email="support@adu-help.com"),
+            reply_to="support@adu-help.com",
+            body=(
+                "Your Microsoft 365 account will be locked. "
+                "Sign in at https://aduniversity-login.com/office to verify your password."
+            ),
+            headers="Authentication-Results: spf=pass dkim=pass dmarc=pass",
+            attachments=[],
+        )
+    )
+
+    category_codes = {category.code for category in result.threat_categories}
+    assert result.risk_score >= 55
+    assert result.threat_level.code in {"high_risk", "critical"}
+    assert "credential_theft" in category_codes
+    assert "microsoft_login_scam" in category_codes
+    assert any(indicator.code == "university_domain_impersonation" for indicator in result.indicators)
+    assert any(indicator.code == "fake_university_service" for indicator in result.indicators)
+
+
 def test_saves_scan_history(monkeypatch) -> None:
     test_db = Path(__file__).resolve().parents[1] / f"test_history_{uuid4().hex}.db"
     monkeypatch.setattr(db, "DB_PATH", test_db)
