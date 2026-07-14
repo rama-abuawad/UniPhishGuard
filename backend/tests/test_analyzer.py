@@ -80,6 +80,7 @@ def test_keywords_alone_do_not_make_email_suspicious() -> None:
     assert result.risk_score < 25
     assert result.verdict == "Likely legitimate"
     assert result.threat_categories == []
+    assert all(indicator.code != "ai_phishing_signal" for indicator in result.indicators)
 
 
 def test_detects_university_domain_impersonation_and_categories() -> None:

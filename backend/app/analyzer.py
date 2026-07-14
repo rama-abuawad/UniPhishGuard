@@ -108,7 +108,8 @@ def analyze_email(email: EmailAnalysisRequest) -> EmailAnalysisResponse:
 
     ai_prediction, ai_confidence = predict_email_risk(email)
     trusted_context = _has_trusted_university_context(email)
-    if ai_prediction == "phishing" and not trusted_context:
+    has_rule_risk = _has_rule_risk(indicators)
+    if ai_prediction == "phishing" and not trusted_context and has_rule_risk:
         indicators.append(
             Indicator(
                 code="ai_phishing_signal",
@@ -118,7 +119,7 @@ def analyze_email(email: EmailAnalysisRequest) -> EmailAnalysisResponse:
         )
 
     categories = _detect_threat_categories(email, indicators)
-    score = _score(indicators, ai_prediction, ai_confidence)
+    score = _score(indicators, ai_prediction, ai_confidence, has_rule_risk)
     return EmailAnalysisResponse(
         verdict=_verdict(score),
         risk_score=score,
@@ -410,15 +411,20 @@ def _score(
     indicators: list[Indicator],
     ai_prediction: str,
     ai_confidence: float,
+    has_rule_risk: bool,
 ) -> int:
     # Simple score weights for the risk meter.
     severity_weights = {"low": 8, "medium": 18, "high": 30}
     score = sum(severity_weights.get(indicator.severity, 0) for indicator in indicators)
 
-    if ai_prediction == "phishing":
+    if ai_prediction == "phishing" and has_rule_risk:
         score += round(16 * ai_confidence)
 
     return max(0, min(score, 100))
+
+
+def _has_rule_risk(indicators: list[Indicator]) -> bool:
+    return any(indicator.severity in {"medium", "high"} for indicator in indicators)
 
 
 def _verdict(score: int) -> str:
