@@ -34,6 +34,20 @@ Checks email details sent by the Outlook add-in.
   "scanned_at": "2026-07-13 14:30:00",
   "verdict": "Likely phishing",
   "risk_score": 72,
+  "threat_level": {
+    "code": "high_risk",
+    "label": "High Risk",
+    "color": "#d45500",
+    "score_floor": 55
+  },
+  "threat_categories": [
+    {
+      "code": "credential_theft",
+      "label": "Credential Theft",
+      "confidence": "high",
+      "reason": "Matched wording related to password."
+    }
+  ],
   "ai_prediction": "phishing",
   "ai_confidence": 0.62,
   "url_count": 1,

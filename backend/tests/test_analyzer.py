@@ -3,7 +3,7 @@ from uuid import uuid4
 
 from app.analyzer import analyze_email
 from app import db
-from app.models import EmailAnalysisRequest, EmailAddress
+from app.models import AttachmentInfo, EmailAnalysisRequest, EmailAddress
 
 
 def test_flags_high_risk_email() -> None:
@@ -60,6 +60,97 @@ def test_adu_tuition_email_is_not_marked_phishing() -> None:
     assert result.risk_score < 25
     assert result.verdict == "Likely legitimate"
     assert result.ai_prediction == "legitimate"
+
+
+def test_keywords_alone_do_not_make_email_suspicious() -> None:
+    result = analyze_email(
+        EmailAnalysisRequest(
+            subject="Internship and scholarship workshop",
+            sender=EmailAddress(name="Career Office", email="career@university.edu"),
+            reply_to="career@university.edu",
+            body=(
+                "The HR team will explain internship applications, scholarship options, "
+                "and Microsoft 365 tools during tomorrow's student workshop."
+            ),
+            headers="Authentication-Results: spf=pass dkim=pass dmarc=pass",
+            attachments=[],
+        )
+    )
+
+    assert result.risk_score < 25
+    assert result.verdict == "Likely legitimate"
+    assert result.threat_categories == []
+    assert all(indicator.code != "ai_phishing_signal" for indicator in result.indicators)
+
+
+def test_external_internship_schedule_email_stays_legitimate() -> None:
+    result = analyze_email(
+        EmailAnalysisRequest(
+            subject="Internship Visit Schedule Reminder",
+            sender=EmailAddress(name="Prosper Yeng", email="prosper@example.com"),
+            reply_to="prosper@example.com",
+            body=(
+                "Dear Internship Students, I hope you are doing well at your internship placements. "
+                "Please provide contacts of your company supervisors in the excel sheet and add "
+                "the google map locations to your companies. The form url remains: "
+                "https://studentsaduac-my.sharepoint.com/Summer-2506-Internship-Visit-Schedule.xlsx"
+            ),
+            headers="Authentication-Results: spf=pass dkim=pass dmarc=pass",
+            attachments=[
+                AttachmentInfo(
+                    name="Summer 2506 Internship Visit Schedule.xlsx",
+                    content_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                    size=35000,
+                )
+            ],
+        )
+    )
+
+    assert result.risk_score < 25
+    assert result.verdict == "Likely legitimate"
+    assert result.threat_categories == []
+    assert result.indicators == []
+
+
+def test_dkim_warning_is_clear_to_user() -> None:
+    result = analyze_email(
+        EmailAnalysisRequest(
+            subject="Project update",
+            sender=EmailAddress(name="Instructor", email="instructor@university.edu"),
+            reply_to="instructor@university.edu",
+            body="Please review the project update before class.",
+            headers="Authentication-Results: spf=pass dkim=fail dmarc=pass",
+            attachments=[],
+        )
+    )
+
+    dkim_indicator = next(indicator for indicator in result.indicators if indicator.code == "dkim_failed")
+    assert "email signature could not be verified" in dkim_indicator.message
+    assert "forwarding or sender setup issues" in dkim_indicator.message
+
+
+def test_detects_university_domain_impersonation_and_categories() -> None:
+    result = analyze_email(
+        EmailAnalysisRequest(
+            subject="ADU IT Helpdesk Microsoft 365 password reset",
+            sender=EmailAddress(name="ADU IT Helpdesk", email="support@adu-help.com"),
+            reply_to="support@adu-help.com",
+            body=(
+                "Your Microsoft 365 account will be locked. "
+                "Sign in at https://aduniversity-login.com/office to verify your password."
+            ),
+            headers="Authentication-Results: spf=pass dkim=pass dmarc=pass",
+            attachments=[],
+        )
+    )
+
+    category_codes = {category.code for category in result.threat_categories}
+    assert result.risk_score >= 55
+    assert result.threat_level.code in {"high_risk", "critical"}
+    assert "credential_theft" in category_codes
+    assert "microsoft_login_scam" in category_codes
+    assert any(indicator.code == "university_domain_impersonation" for indicator in result.indicators)
+    assert any(indicator.code == "fake_university_service" for indicator in result.indicators)
 
 
 def test_saves_scan_history(monkeypatch) -> None:

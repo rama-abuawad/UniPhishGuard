@@ -27,11 +27,27 @@ class Indicator(BaseModel):
     message: str
 
 
+class ThreatCategory(BaseModel):
+    code: str
+    label: str
+    confidence: str
+    reason: str
+
+
+class ThreatLevel(BaseModel):
+    code: str
+    label: str
+    color: str
+    score_floor: int = Field(ge=0, le=100)
+
+
 class EmailAnalysisResponse(BaseModel):
     scan_id: int | None = None
     scanned_at: str | None = None
     verdict: str
     risk_score: int = Field(ge=0, le=100)
+    threat_level: ThreatLevel
+    threat_categories: list[ThreatCategory] = Field(default_factory=list)
     ai_prediction: str
     ai_confidence: float = Field(ge=0, le=1)
     url_count: int = 0

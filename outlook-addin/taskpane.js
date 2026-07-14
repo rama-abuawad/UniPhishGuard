@@ -157,8 +157,11 @@ function getReplyTo(item) {
 
 function renderReport(report) {
   lastReport = report;
-  const verdictClass = verdictClassName(report.verdict);
+  const threatLevel = normalizeThreatLevel(report);
+  const verdictClass = threatLevelClassName(threatLevel.code, report.verdict);
+  const threatColor = safeColor(threatLevel.color);
   const confidencePercent = Math.round(report.ai_confidence * 100);
+  const categories = renderThreatCategories(report.threat_categories || []);
   const indicators = report.indicators.length
     ? report.indicators.map((indicator) => `
       <li class="${escapeHtml(indicator.severity)}">
@@ -176,6 +179,10 @@ function renderReport(report) {
     <article class="report ${verdictClass}">
       <div class="verdict">
         <div>
+          <span class="threat-badge ${escapeHtml(threatLevel.code)}">
+            <span class="threat-dot"></span>
+            ${escapeHtml(threatLevel.label)}
+          </span>
           <h2>${escapeHtml(report.verdict)}</h2>
           <p class="meta">Scan #${escapeHtml(report.scan_id || "-")} ${escapeHtml(report.scanned_at || "")}</p>
           <p class="meta">AI phishing detection: ${formatPrediction(report.ai_prediction)} - ${confidencePercent}% AI confidence</p>
@@ -185,11 +192,11 @@ function renderReport(report) {
 
       <div class="meter-block">
         <div class="meter-row">
-          <span>Risk score</span>
-          <strong>${report.risk_score}/100</strong>
+          <span>Threat level</span>
+          <strong>${escapeHtml(threatLevel.label)} - ${report.risk_score}/100</strong>
         </div>
         <div class="meter">
-          <span class="meter-fill risk-fill" style="width: ${clampPercent(report.risk_score)}%"></span>
+          <span class="meter-fill risk-fill" style="width: ${clampPercent(report.risk_score)}%; background: ${threatColor}"></span>
         </div>
       </div>
 
@@ -217,6 +224,9 @@ function renderReport(report) {
           <span class="summary-value">${report.indicators.length}</span>
         </div>
       </div>
+
+      <p class="section-title">Threat Category</p>
+      <div class="category-list">${categories}</div>
 
       <p class="section-title">Why This Result?</p>
       <ul class="list">${indicators}</ul>
@@ -248,6 +258,20 @@ function renderHistory(items) {
   `;
 }
 
+function renderThreatCategories(categories) {
+  if (!categories.length) {
+    return '<p class="empty-inline">No specific phishing category detected.</p>';
+  }
+
+  return categories.map((category) => `
+    <div class="category-chip">
+      <strong>${escapeHtml(category.label)}</strong>
+      <span>${escapeHtml(category.confidence)} confidence</span>
+      <small>${escapeHtml(category.reason)}</small>
+    </div>
+  `).join("");
+}
+
 function renderError(error) {
   lastReport = null;
   resultEl.innerHTML = `
@@ -273,6 +297,12 @@ function prepareItReport() {
         .map((indicator) => `- ${escapeHtml(indicator.severity.toUpperCase())}: ${escapeHtml(indicator.message)}`)
         .join("<br>")
     : "- No major indicators found";
+  const categoryLines = (lastReport.threat_categories || []).length
+    ? lastReport.threat_categories
+        .map((category) => `- ${escapeHtml(category.label)} (${escapeHtml(category.confidence)})`)
+        .join("<br>")
+    : "- No specific category detected";
+  const threatLevel = normalizeThreatLevel(lastReport);
 
   resultEl.insertAdjacentHTML("beforeend", `
     <div id="itReport" class="it-report">
@@ -280,8 +310,10 @@ function prepareItReport() {
       <p class="meta">Use this summary when reporting the email to university IT.</p>
       <div class="report-summary">
         <strong>Verdict:</strong> ${escapeHtml(lastReport.verdict)}<br>
+        <strong>Threat level:</strong> ${escapeHtml(threatLevel.label)}<br>
         <strong>Risk score:</strong> ${lastReport.risk_score}/100<br>
         <strong>AI confidence:</strong> ${Math.round(lastReport.ai_confidence * 100)}%<br>
+        <strong>Threat categories:</strong><br>${categoryLines}<br>
         <strong>Indicators:</strong><br>${indicatorLines}
       </div>
     </div>
@@ -297,10 +329,10 @@ function setLoading(isLoading) {
 
 function sampleEmail() {
   return {
-    subject: "Urgent password verification required",
-    sender: { name: "IT Support", email: "it@university.edu" },
-    reply_to: "support@example.net",
-    body: "Click http://192.168.1.10/login to verify your account.",
+    subject: "ADU IT Helpdesk Microsoft 365 password verification required",
+    sender: { name: "ADU IT Helpdesk", email: "support@adu-help.com" },
+    reply_to: "support@adu-help.com",
+    body: "Click http://192.168.1.10/login or https://aduniversity-login.com/office to verify your Microsoft 365 password.",
     headers: "Authentication-Results: spf=pass dkim=pass dmarc=fail",
     attachments: [{ name: "invoice.pdf.exe", content_type: "application/octet-stream", size: 42100 }],
   };
@@ -337,6 +369,50 @@ function verdictClassName(verdict) {
     return "verdict-suspicious";
   }
   return "verdict-legitimate";
+}
+
+function normalizeThreatLevel(report) {
+  // Fallback for older API responses.
+  if (report.threat_level) {
+    return report.threat_level;
+  }
+
+  const score = Number(report.risk_score) || 0;
+  if (score >= 80) {
+    return { code: "critical", label: "Critical", color: "#c93232" };
+  }
+  if (score >= 55) {
+    return { code: "high_risk", label: "High Risk", color: "#d45500" };
+  }
+  if (score >= 25) {
+    return { code: "suspicious", label: "Suspicious", color: "#c87816" };
+  }
+  return { code: "safe", label: "Safe", color: "#1f7a4d" };
+}
+
+function threatLevelClassName(code, verdict) {
+  if (code === "critical") {
+    return "verdict-high";
+  }
+  if (code === "high_risk") {
+    return "verdict-phishing";
+  }
+  if (code === "suspicious") {
+    return "verdict-suspicious";
+  }
+  if (code === "safe") {
+    return "verdict-legitimate";
+  }
+  return verdictClassName(verdict);
+}
+
+function safeColor(value) {
+  // Only allow hex colors in inline styles.
+  const color = String(value || "");
+  if (/^#[0-9a-fA-F]{6}$/.test(color)) {
+    return color;
+  }
+  return "#4477b2";
 }
 
 function clampPercent(value) {

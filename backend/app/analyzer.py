@@ -6,15 +6,87 @@ from html import unescape
 from urllib.parse import urlparse
 
 from .ai import predict_email_risk
-from .models import EmailAnalysisRequest, EmailAnalysisResponse, Indicator
+from .models import EmailAnalysisRequest, EmailAnalysisResponse, Indicator, ThreatCategory, ThreatLevel
 
 
 URL_RE = re.compile(r"https?://[^\s<>\"]+", re.IGNORECASE)
+
+# Trusted ADU and Microsoft domains.
 TRUSTED_DOMAINS = {
     "adu.ac.ae",
+    "aduac-my.sharepoint.com",
+    "aduac.sharepoint.com",
     "info.adu.ac.ae",
     "students.adu.ac.ae",
+    "studentsaduac-my.sharepoint.com",
+    "studentsaduac.sharepoint.com",
+    "university.edu",
+    "office.com",
+    "microsoft.com",
+    "microsoftonline.com",
+    "outlook.com",
 }
+
+# Words used to spot fake university branding.
+UNIVERSITY_BRAND_TERMS = {
+    "adu",
+    "abu dhabi university",
+}
+
+# Common university services used in scams.
+UNIVERSITY_SERVICE_TERMS = {
+    "hr": ("hr", "human resources", "recruitment", "payroll"),
+    "student_affairs": ("student affairs", "student services", "registrar", "admissions"),
+    "it_helpdesk": ("it helpdesk", "it support", "service desk", "password reset", "account verification"),
+    "blackboard": ("blackboard", "learning management", "lms"),
+    "microsoft_365": ("microsoft 365", "office 365", "outlook", "teams", "onedrive"),
+    "scholarships": ("scholarship", "financial aid", "grant", "tuition award"),
+    "internships": ("internship", "career office", "placement", "trainee program"),
+}
+
+# Keywords for phishing category labels.
+THREAT_CATEGORY_RULES = (
+    (
+        "credential_theft",
+        "Credential Theft",
+        ("password", "verify your account", "login", "sign in", "credentials", "account locked", "mfa"),
+    ),
+    (
+        "business_email_compromise",
+        "Business Email Compromise",
+        ("wire transfer", "bank details", "payment urgently", "gift card", "confidential request", "ceo"),
+    ),
+    (
+        "scholarship_scam",
+        "Scholarship Scam",
+        ("scholarship", "financial aid", "grant", "tuition award", "application fee"),
+    ),
+    (
+        "internship_scam",
+        "Internship Scam",
+        ("internship", "job offer", "trainee", "placement", "remote work", "processing fee"),
+    ),
+    (
+        "fake_hr",
+        "Fake HR",
+        ("hr", "human resources", "payroll", "employee record", "recruitment"),
+    ),
+    (
+        "invoice_scam",
+        "Invoice Scam",
+        ("invoice", "purchase order", "overdue payment", "remittance", "bank account"),
+    ),
+    (
+        "malware_delivery",
+        "Malware Delivery",
+        ("download attachment", "enable macros", "protected document", "view document", "attached file"),
+    ),
+    (
+        "microsoft_login_scam",
+        "Microsoft Login Scam",
+        ("microsoft 365", "office 365", "outlook", "teams", "onedrive", "microsoft account"),
+    ),
+)
 HIGH_RISK_EXTENSIONS = {
     ".exe",
     ".scr",
@@ -26,6 +98,14 @@ HIGH_RISK_EXTENSIONS = {
     ".iso",
     ".lnk",
 }
+AUTH_FAILURE_MESSAGES = {
+    "spf": "SPF warning: the sending server was not approved for this sender domain.",
+    "dkim": (
+        "DKIM warning: the email signature could not be verified. "
+        "This can happen with forwarding or sender setup issues, but be careful if the email asks for links, files, or personal information."
+    ),
+    "dmarc": "DMARC warning: the sender domain did not pass the main anti-spoofing policy.",
+}
 
 
 def analyze_email(email: EmailAnalysisRequest) -> EmailAnalysisResponse:
@@ -36,10 +116,12 @@ def analyze_email(email: EmailAnalysisRequest) -> EmailAnalysisResponse:
     indicators.extend(_check_authentication_results(email.headers))
     indicators.extend(_check_urls(email.body))
     indicators.extend(_check_attachments(email))
+    indicators.extend(_check_university_impersonation(email))
 
     ai_prediction, ai_confidence = predict_email_risk(email)
     trusted_context = _has_trusted_university_context(email)
-    if ai_prediction == "phishing" and not trusted_context:
+    has_rule_risk = _has_rule_risk(indicators)
+    if ai_prediction == "phishing" and not trusted_context and has_rule_risk:
         indicators.append(
             Indicator(
                 code="ai_phishing_signal",
@@ -48,10 +130,13 @@ def analyze_email(email: EmailAnalysisRequest) -> EmailAnalysisResponse:
             )
         )
 
-    score = _score(indicators, ai_prediction, ai_confidence)
+    categories = _detect_threat_categories(email, indicators)
+    score = _score(indicators, ai_prediction, ai_confidence, has_rule_risk)
     return EmailAnalysisResponse(
         verdict=_verdict(score),
         risk_score=score,
+        threat_level=_threat_level(score),
+        threat_categories=categories,
         ai_prediction=ai_prediction,
         ai_confidence=ai_confidence,
         url_count=url_count,
@@ -86,7 +171,7 @@ def _check_authentication_results(headers: str) -> list[Indicator]:
                 Indicator(
                     code=f"{protocol}_failed",
                     severity="high" if protocol == "dmarc" else "medium",
-                    message=f"{protocol.upper()} check did not pass.",
+                    message=AUTH_FAILURE_MESSAGES[protocol],
                 )
             )
 
@@ -171,15 +256,186 @@ def _check_attachments(email: EmailAnalysisRequest) -> list[Indicator]:
     return indicators
 
 
-def _score(indicators: list[Indicator], ai_prediction: str, ai_confidence: float) -> int:
-    # Basic weights used for the final score.
+def _check_university_impersonation(email: EmailAnalysisRequest) -> list[Indicator]:
+    indicators: list[Indicator] = []
+    text = _email_text(email)
+    text_without_urls = URL_RE.sub(" ", text)
+    sender_domain = _domain_from_address(str(email.sender.email))
+    hosts = _url_hosts(email.body)
+
+    # Catches fake domains like adu-help.com or aduniversity-login.com.
+    suspicious_domains = {
+        domain
+        for domain in {sender_domain, *hosts}
+        if domain and not _is_trusted_domain(domain) and _looks_like_university_domain(domain)
+    }
+
+    for domain in sorted(suspicious_domains):
+        indicators.append(
+            Indicator(
+                code="university_domain_impersonation",
+                severity="high",
+                message=f"Domain appears to imitate a university service: {domain}",
+            )
+        )
+
+    has_untrusted_brand = not _is_trusted_domain(sender_domain) and any(
+        term in text_without_urls for term in UNIVERSITY_BRAND_TERMS
+    )
+    if has_untrusted_brand:
+        indicators.append(
+            Indicator(
+                code="untrusted_university_branding",
+                severity="medium",
+                message="Email uses university branding but was not sent from a trusted university domain.",
+            )
+        )
+
+    impersonated_services = _matched_university_services(text)
+    if (
+        impersonated_services
+        and not _has_trusted_university_context(email)
+        and (suspicious_domains or has_untrusted_brand or _has_account_action_terms(text))
+    ):
+        indicators.append(
+            Indicator(
+                code="fake_university_service",
+                severity="medium",
+                message=f"Email appears to impersonate a university service: {', '.join(impersonated_services)}.",
+            )
+        )
+
+    return indicators
+
+
+def _detect_threat_categories(
+    email: EmailAnalysisRequest,
+    indicators: list[Indicator],
+) -> list[ThreatCategory]:
+    text = _email_text(email)
+    categories: list[ThreatCategory] = []
+    indicator_codes = {indicator.code for indicator in indicators}
+    category_context = any(indicator.severity in {"medium", "high"} for indicator in indicators)
+
+    if category_context:
+        for code, label, keywords in THREAT_CATEGORY_RULES:
+            matched = [keyword for keyword in keywords if keyword in text]
+            if matched:
+                categories.append(
+                    ThreatCategory(
+                        code=code,
+                        label=label,
+                        confidence="high" if len(matched) >= 2 else "medium",
+                        reason=f"Found phrase: {matched[0]}.",
+                    )
+                )
+
+    if "dangerous_attachment_extension" in indicator_codes or "double_extension_attachment" in indicator_codes:
+        categories = _upsert_category(
+            categories,
+            ThreatCategory(
+                code="malware_delivery",
+                label="Malware Delivery",
+                confidence="high",
+                reason="Attachment pattern is commonly used to deliver malware.",
+            ),
+        )
+
+    if "fake_university_service" in indicator_codes:
+        for service in _matched_university_services(text):
+            service_code = {
+                "HR": "fake_hr",
+                "Scholarships": "scholarship_scam",
+                "Internships": "internship_scam",
+                "Microsoft 365": "microsoft_login_scam",
+            }.get(service)
+            if service_code and service_code not in {category.code for category in categories}:
+                label = next(rule[1] for rule in THREAT_CATEGORY_RULES if rule[0] == service_code)
+                categories.append(
+                    ThreatCategory(
+                        code=service_code,
+                        label=label,
+                        confidence="medium",
+                        reason=f"Message claims to come from {service}.",
+                    )
+                )
+
+    return categories[:5]
+
+
+def _upsert_category(categories: list[ThreatCategory], category: ThreatCategory) -> list[ThreatCategory]:
+    return [existing for existing in categories if existing.code != category.code] + [category]
+
+
+def _email_text(email: EmailAnalysisRequest) -> str:
+    return " ".join(
+        [
+            email.subject or "",
+            email.sender.name or "",
+            str(email.sender.email),
+            email.reply_to or "",
+            _strip_html(email.body or ""),
+        ]
+    ).lower()
+
+
+def _matched_university_services(text: str) -> list[str]:
+    labels = {
+        "hr": "HR",
+        "student_affairs": "Student Affairs",
+        "it_helpdesk": "IT Helpdesk",
+        "blackboard": "Blackboard",
+        "microsoft_365": "Microsoft 365",
+        "scholarships": "Scholarships",
+        "internships": "Internships",
+    }
+    return [
+        labels[code]
+        for code, keywords in UNIVERSITY_SERVICE_TERMS.items()
+        if any(keyword in text for keyword in keywords)
+    ]
+
+
+def _looks_like_university_domain(domain: str) -> bool:
+    normalized = re.sub(r"[^a-z0-9]", "", domain.lower())
+    if normalized.startswith("adu") or "aduniversity" in normalized or "abudhabiuniversity" in normalized:
+        return True
+
+    university_words = ("help", "support", "login", "portal", "blackboard", "student", "hr")
+    return "adu" in normalized and any(word in normalized for word in university_words)
+
+
+def _has_account_action_terms(text: str) -> bool:
+    action_terms = (
+        "verify",
+        "password",
+        "sign in",
+        "login",
+        "account locked",
+        "update your account",
+        "confirm your account",
+    )
+    return any(term in text for term in action_terms)
+
+
+def _score(
+    indicators: list[Indicator],
+    ai_prediction: str,
+    ai_confidence: float,
+    has_rule_risk: bool,
+) -> int:
+    # Simple score weights for the risk meter.
     severity_weights = {"low": 8, "medium": 18, "high": 30}
     score = sum(severity_weights.get(indicator.severity, 0) for indicator in indicators)
 
-    if ai_prediction == "phishing":
+    if ai_prediction == "phishing" and has_rule_risk:
         score += round(16 * ai_confidence)
 
     return max(0, min(score, 100))
+
+
+def _has_rule_risk(indicators: list[Indicator]) -> bool:
+    return any(indicator.severity in {"medium", "high"} for indicator in indicators)
 
 
 def _verdict(score: int) -> str:
@@ -190,6 +446,16 @@ def _verdict(score: int) -> str:
     if score >= 25:
         return "Suspicious"
     return "Likely legitimate"
+
+
+def _threat_level(score: int) -> ThreatLevel:
+    if score >= 80:
+        return ThreatLevel(code="critical", label="Critical", color="#c93232", score_floor=80)
+    if score >= 55:
+        return ThreatLevel(code="high_risk", label="High Risk", color="#d45500", score_floor=55)
+    if score >= 25:
+        return ThreatLevel(code="suspicious", label="Suspicious", color="#c87816", score_floor=25)
+    return ThreatLevel(code="safe", label="Safe", color="#1f7a4d", score_floor=0)
 
 
 def _recommended_actions(score: int, indicators: list[Indicator]) -> list[str]:

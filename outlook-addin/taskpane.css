@@ -129,7 +129,46 @@ h1 {
 .verdict h2 {
   font-size: 18px;
   line-height: 1.2;
-  margin: 0;
+  margin: 5px 0 0;
+}
+
+.threat-badge {
+  align-items: center;
+  border-radius: 999px;
+  display: inline-flex;
+  font-size: 12px;
+  font-weight: 800;
+  gap: 6px;
+  line-height: 1;
+  padding: 6px 8px;
+}
+
+.threat-badge.safe {
+  background: #e9f7ef;
+  color: #145c39;
+}
+
+.threat-badge.suspicious {
+  background: #fff4df;
+  color: #8a4f00;
+}
+
+.threat-badge.high_risk {
+  background: #fff0e8;
+  color: #9b3e00;
+}
+
+.threat-badge.critical {
+  background: #ffecec;
+  color: #9d1d1d;
+}
+
+.threat-dot {
+  background: currentColor;
+  border-radius: 50%;
+  display: inline-block;
+  height: 8px;
+  width: 8px;
 }
 
 .score {
@@ -246,6 +285,49 @@ h1 {
   display: block;
   font-size: 16px;
   font-weight: 800;
+}
+
+.category-list {
+  display: grid;
+  gap: 8px;
+}
+
+.category-chip {
+  background: #fff;
+  border: 1px solid #d9e1ec;
+  border-radius: 8px;
+  display: grid;
+  gap: 4px;
+  padding: 9px 10px;
+}
+
+.category-chip strong {
+  color: #172033;
+  font-size: 13px;
+}
+
+.category-chip span {
+  color: #2b6a4f;
+  font-size: 12px;
+  font-weight: 800;
+  text-transform: capitalize;
+}
+
+.category-chip small {
+  color: #536174;
+  font-size: 12px;
+  line-height: 1.35;
+}
+
+.empty-inline {
+  background: #f7f9fc;
+  border: 1px dashed #cdd8ea;
+  border-radius: 8px;
+  color: #637083;
+  font-size: 13px;
+  line-height: 1.4;
+  margin: 0;
+  padding: 10px;
 }
 
 .section-title {
