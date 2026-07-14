@@ -27,7 +27,6 @@ TRUSTED_DOMAINS = {
 UNIVERSITY_BRAND_TERMS = {
     "adu",
     "abu dhabi university",
-    "university",
 }
 
 # Common university services used in scams.
@@ -119,7 +118,7 @@ def analyze_email(email: EmailAnalysisRequest) -> EmailAnalysisResponse:
         )
 
     categories = _detect_threat_categories(email, indicators)
-    score = _score(indicators, ai_prediction, ai_confidence, categories)
+    score = _score(indicators, ai_prediction, ai_confidence)
     return EmailAnalysisResponse(
         verdict=_verdict(score),
         risk_score=score,
@@ -266,7 +265,8 @@ def _check_university_impersonation(email: EmailAnalysisRequest) -> list[Indicat
             )
         )
 
-    if not _is_trusted_domain(sender_domain) and any(term in text for term in UNIVERSITY_BRAND_TERMS):
+    has_untrusted_brand = not _is_trusted_domain(sender_domain) and any(term in text for term in UNIVERSITY_BRAND_TERMS)
+    if has_untrusted_brand:
         indicators.append(
             Indicator(
                 code="untrusted_university_branding",
@@ -276,7 +276,11 @@ def _check_university_impersonation(email: EmailAnalysisRequest) -> list[Indicat
         )
 
     impersonated_services = _matched_university_services(text)
-    if impersonated_services and not _has_trusted_university_context(email):
+    if (
+        impersonated_services
+        and not _has_trusted_university_context(email)
+        and (suspicious_domains or has_untrusted_brand or _has_account_action_terms(text) or _has_untrusted_links(email))
+    ):
         indicators.append(
             Indicator(
                 code="fake_university_service",
@@ -295,18 +299,20 @@ def _detect_threat_categories(
     text = _email_text(email)
     categories: list[ThreatCategory] = []
     indicator_codes = {indicator.code for indicator in indicators}
+    category_context = any(indicator.severity in {"medium", "high"} for indicator in indicators)
 
-    for code, label, keywords in THREAT_CATEGORY_RULES:
-        matched = [keyword for keyword in keywords if keyword in text]
-        if matched:
-            categories.append(
-                ThreatCategory(
-                    code=code,
-                    label=label,
-                    confidence="high" if len(matched) >= 2 else "medium",
-                    reason=f"Found phrase: {matched[0]}.",
+    if category_context:
+        for code, label, keywords in THREAT_CATEGORY_RULES:
+            matched = [keyword for keyword in keywords if keyword in text]
+            if matched:
+                categories.append(
+                    ThreatCategory(
+                        code=code,
+                        label=label,
+                        confidence="high" if len(matched) >= 2 else "medium",
+                        reason=f"Found phrase: {matched[0]}.",
+                    )
                 )
-            )
 
     if "dangerous_attachment_extension" in indicator_codes or "double_extension_attachment" in indicator_codes:
         categories = _upsert_category(
@@ -383,11 +389,27 @@ def _looks_like_university_domain(domain: str) -> bool:
     return "adu" in normalized and any(word in normalized for word in university_words)
 
 
+def _has_account_action_terms(text: str) -> bool:
+    action_terms = (
+        "verify",
+        "password",
+        "sign in",
+        "login",
+        "account locked",
+        "update your account",
+        "confirm your account",
+    )
+    return any(term in text for term in action_terms)
+
+
+def _has_untrusted_links(email: EmailAnalysisRequest) -> bool:
+    return any(not _is_trusted_domain(host) for host in _url_hosts(email.body))
+
+
 def _score(
     indicators: list[Indicator],
     ai_prediction: str,
     ai_confidence: float,
-    categories: list[ThreatCategory],
 ) -> int:
     # Simple score weights for the risk meter.
     severity_weights = {"low": 8, "medium": 18, "high": 30}
@@ -395,9 +417,6 @@ def _score(
 
     if ai_prediction == "phishing":
         score += round(16 * ai_confidence)
-
-    if categories:
-        score += min(12, 4 * len(categories))
 
     return max(0, min(score, 100))
 

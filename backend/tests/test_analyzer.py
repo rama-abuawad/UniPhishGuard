@@ -62,6 +62,26 @@ def test_adu_tuition_email_is_not_marked_phishing() -> None:
     assert result.ai_prediction == "legitimate"
 
 
+def test_keywords_alone_do_not_make_email_suspicious() -> None:
+    result = analyze_email(
+        EmailAnalysisRequest(
+            subject="Internship and scholarship workshop",
+            sender=EmailAddress(name="Career Office", email="career@university.edu"),
+            reply_to="career@university.edu",
+            body=(
+                "The HR team will explain internship applications, scholarship options, "
+                "and Microsoft 365 tools during tomorrow's student workshop."
+            ),
+            headers="Authentication-Results: spf=pass dkim=pass dmarc=pass",
+            attachments=[],
+        )
+    )
+
+    assert result.risk_score < 25
+    assert result.verdict == "Likely legitimate"
+    assert result.threat_categories == []
+
+
 def test_detects_university_domain_impersonation_and_categories() -> None:
     result = analyze_email(
         EmailAnalysisRequest(
