@@ -2,29 +2,59 @@ from __future__ import annotations
 
 import re
 from email.utils import parseaddr
+from html.parser import HTMLParser
 from html import unescape
-from urllib.parse import urlparse
+from ipaddress import ip_address
+from urllib.parse import unquote, urlparse
 
 from .ai import predict_email_risk
-from .models import EmailAnalysisRequest, EmailAnalysisResponse, Indicator, ThreatCategory, ThreatLevel
+from .models import EmailAnalysisRequest, EmailAnalysisResponse, Indicator, LinkInfo, ThreatCategory, ThreatLevel
 
 
 URL_RE = re.compile(r"https?://[^\s<>\"]+", re.IGNORECASE)
 
-# Trusted ADU and Microsoft domains.
-TRUSTED_DOMAINS = {
+# Domains controlled by ADU. These are the only domains that create sender trust.
+APPROVED_SENDER_DOMAINS = {
     "adu.ac.ae",
-    "aduac-my.sharepoint.com",
-    "aduac.sharepoint.com",
     "info.adu.ac.ae",
     "students.adu.ac.ae",
+    "university.edu",
+}
+
+# Known ADU service/link domains. Useful context, but not proof that a message is safe.
+APPROVED_LINK_DOMAINS = {
+    "adu.ac.ae",
+    "info.adu.ac.ae",
+    "students.adu.ac.ae",
+    "aduac-my.sharepoint.com",
+    "aduac.sharepoint.com",
     "studentsaduac-my.sharepoint.com",
     "studentsaduac.sharepoint.com",
-    "university.edu",
+}
+
+COMMON_HOSTING_DOMAINS = {
     "office.com",
     "microsoft.com",
     "microsoftonline.com",
     "outlook.com",
+    "live.com",
+    "sharepoint.com",
+    "onedrive.live.com",
+    "google.com",
+    "drive.google.com",
+    "dropbox.com",
+}
+
+URL_SHORTENERS = {
+    "bit.ly",
+    "tinyurl.com",
+    "t.co",
+    "goo.gl",
+    "ow.ly",
+    "is.gd",
+    "buff.ly",
+    "cutt.ly",
+    "rebrand.ly",
 }
 
 # Words used to spot fake university branding.
@@ -87,6 +117,16 @@ THREAT_CATEGORY_RULES = (
         ("microsoft 365", "office 365", "outlook", "teams", "onedrive", "microsoft account"),
     ),
 )
+THREAT_CATEGORY_REASON_TEMPLATES = {
+    "credential_theft": "This email may be asking for account access.",
+    "business_email_compromise": "This email may involve a money-related request.",
+    "scholarship_scam": "This email may be using financial aid details.",
+    "internship_scam": "This email may be using job or internship details.",
+    "fake_hr": "This email may be pretending to be HR or staff support.",
+    "invoice_scam": "This email may be using payment or invoice details.",
+    "malware_delivery": "This email may be trying to make you open a file or download.",
+    "microsoft_login_scam": "This email may be using Microsoft sign-in details.",
+}
 HIGH_RISK_EXTENSIONS = {
     ".exe",
     ".scr",
@@ -106,32 +146,45 @@ AUTH_FAILURE_MESSAGES = {
     ),
     "dmarc": "DMARC warning: the sender domain did not pass the main anti-spoofing policy.",
 }
+AUTH_PLAIN_NAMES = {
+    "spf": "sender-server check",
+    "dkim": "DKIM signature check",
+    "dmarc": "DMARC anti-spoofing check",
+}
+AUTH_PLAIN_EXPLANATIONS = {
+    "spf": "server not confirmed",
+    "dkim": "sender signature not confirmed",
+    "dmarc": "sender domain not confirmed",
+}
+AUTH_BAD_RESULTS = {"fail", "softfail", "permerror", "temperror"}
+AUTH_PASS_RESULTS = {"pass"}
+AUTH_INCONCLUSIVE_RESULTS = {"neutral", "none", "policy", "bestguesspass"}
 
 
 def analyze_email(email: EmailAnalysisRequest) -> EmailAnalysisResponse:
     indicators: list[Indicator] = []
-    url_count = _count_urls(email.body)
+    links = _collect_links(email)
+    url_count = len({link.href for link in links})
 
     indicators.extend(_check_sender_reply_to(email))
-    indicators.extend(_check_authentication_results(email.headers))
-    indicators.extend(_check_urls(email.body))
+    indicators.extend(_check_authentication_results(email.headers, email.headers_status))
+    indicators.extend(_check_urls(email, links))
     indicators.extend(_check_attachments(email))
     indicators.extend(_check_university_impersonation(email))
 
     ai_prediction, ai_confidence = predict_email_risk(email)
-    trusted_context = _has_trusted_university_context(email)
-    has_rule_risk = _has_rule_risk(indicators)
-    if ai_prediction == "phishing" and not trusted_context and has_rule_risk:
+    trusted_context = _has_trusted_sender_context(email)
+    if ai_prediction == "phishing" and not trusted_context and ai_confidence >= 0.75:
         indicators.append(
             Indicator(
                 code="ai_phishing_signal",
                 severity="medium",
-                message="AI text analysis found phishing-like wording.",
+                message=f"AI text analysis found phishing-like wording ({round(ai_confidence * 100)}%).",
             )
         )
 
     categories = _detect_threat_categories(email, indicators)
-    score = _score(indicators, ai_prediction, ai_confidence, has_rule_risk)
+    score = _score(indicators, ai_prediction, ai_confidence)
     return EmailAnalysisResponse(
         verdict=_verdict(score),
         risk_score=score,
@@ -161,12 +214,38 @@ def _check_sender_reply_to(email: EmailAnalysisRequest) -> list[Indicator]:
     return []
 
 
-def _check_authentication_results(headers: str) -> list[Indicator]:
+def _check_authentication_results(headers: str, status: str = "checked") -> list[Indicator]:
+    if status != "checked":
+        return [
+            Indicator(
+                code="auth_headers_not_checked",
+                severity="low",
+                message="Email authentication headers were not checked in this Outlook client.",
+            )
+        ]
+
     lowered = headers.lower()
     indicators: list[Indicator] = []
 
+    if not headers.strip():
+        return [
+            Indicator(
+                code="auth_headers_not_checked",
+                severity="low",
+                message="Email authentication headers were not available, so SPF, DKIM, and DMARC were not checked.",
+            )
+        ]
+
+    auth_blocks = _authentication_result_blocks(headers)
+    parsed_results = _parse_authentication_results(auth_blocks)
+
     for protocol in ("spf", "dkim", "dmarc"):
-        if re.search(rf"\b{protocol}\s*=\s*(fail|softfail|permerror|temperror)", lowered):
+        results = parsed_results.get(protocol, [])
+        bad_results = [result for result in results if result["result"] in AUTH_BAD_RESULTS]
+        pass_results = [result for result in results if result["result"] in AUTH_PASS_RESULTS]
+        unclear_results = [result for result in results if result["result"] in AUTH_INCONCLUSIVE_RESULTS]
+
+        if bad_results and not pass_results:
             indicators.append(
                 Indicator(
                     code=f"{protocol}_failed",
@@ -174,6 +253,45 @@ def _check_authentication_results(headers: str) -> list[Indicator]:
                     message=AUTH_FAILURE_MESSAGES[protocol],
                 )
             )
+        elif bad_results and pass_results:
+            indicators.append(
+                Indicator(
+                    code=f"{protocol}_inconclusive",
+                    severity="low",
+                    message=f"{protocol.upper()} had mixed results. This can happen with forwarding or mailing lists.",
+                )
+            )
+        elif unclear_results and not pass_results:
+            indicators.append(
+                Indicator(
+                    code=f"{protocol}_inconclusive",
+                    severity="low",
+                    message=(
+                        f"{AUTH_PLAIN_NAMES[protocol]} was unclear: "
+                        f"{AUTH_PLAIN_EXPLANATIONS[protocol]}. Review the other warnings too."
+                    ),
+                )
+            )
+
+    if _has_auth_alignment_problem(auth_blocks):
+        indicators.append(
+            Indicator(
+                code="auth_alignment_warning",
+                severity="medium",
+                message="Email authentication passed somewhere, but sender-domain alignment looks suspicious.",
+            )
+        )
+
+    if "arc-authentication-results" in lowered and any(
+        indicator.code.endswith("_failed") for indicator in indicators
+    ):
+        indicators.append(
+            Indicator(
+                code="forwarding_or_arc_context",
+                severity="low",
+                message="ARC/forwarding headers are present, so authentication failures should be reviewed with the sender context.",
+            )
+        )
 
     if "authentication-results" not in lowered and headers.strip():
         indicators.append(
@@ -187,16 +305,80 @@ def _check_authentication_results(headers: str) -> list[Indicator]:
     return indicators
 
 
-def _check_urls(body: str) -> list[Indicator]:
-    text = _strip_html(body or "")
-    urls = set(URL_RE.findall(f"{body} {text}"))
+def _check_urls(email: EmailAnalysisRequest, links: list[LinkInfo]) -> list[Indicator]:
+    urls = {link.href for link in links}
     indicators: list[Indicator] = []
 
-    for url in urls:
-        parsed = urlparse(url.rstrip(".,);]"))
-        host = parsed.hostname or ""
-        if _is_trusted_domain(host):
+    for link in links:
+        url = _clean_url(link.href)
+        parsed = urlparse(url)
+        host = _normalize_host(parsed.hostname or "")
+        display_host = _displayed_host(link.text)
+
+        if display_host and host and display_host != host and not _same_registrable_domain(display_host, host):
+            indicators.append(
+                Indicator(
+                    code="link_text_destination_mismatch",
+                    severity="high",
+                    message=f"Link text shows {display_host}, but it actually opens {host}.",
+                )
+            )
+            if _is_approved_link_domain(display_host) and not _is_approved_link_domain(host):
+                indicators.append(
+                    Indicator(
+                        code="approved_domain_displayed_for_untrusted_link",
+                        severity="medium",
+                        message="The link displays an approved university domain but opens an unapproved domain.",
+                    )
+                )
+
+        if _is_approved_link_domain(host):
             continue
+
+        if _is_common_hosting_domain(host):
+            sender_domain = _domain_from_address(str(email.sender.email))
+            if not _is_approved_sender_domain(sender_domain):
+                indicators.append(
+                    Indicator(
+                        code="external_sender_common_hosting_link",
+                        severity="low",
+                        message=f"External sender uses a common hosting or Microsoft link: {host}.",
+                    )
+                )
+            continue
+
+        if parsed.username or parsed.password:
+            indicators.append(
+                Indicator(
+                    code="url_uses_user_info",
+                    severity="high",
+                    message=f"URL hides the real destination with user-info text: {host}",
+                )
+            )
+        if parsed.port and parsed.port not in {80, 443}:
+            indicators.append(
+                Indicator(
+                    code="url_unusual_port",
+                    severity="medium",
+                    message=f"URL uses an unusual port: {host}:{parsed.port}",
+                )
+            )
+        if host in URL_SHORTENERS:
+            indicators.append(
+                Indicator(
+                    code="url_shortener",
+                    severity="medium",
+                    message=f"URL uses a link shortener: {host}",
+                )
+            )
+        if "%" in url or unquote(url) != url:
+            indicators.append(
+                Indicator(
+                    code="encoded_url",
+                    severity="medium",
+                    message=f"URL contains encoded characters: {host}",
+                )
+            )
         if _is_ip_address(host):
             indicators.append(
                 Indicator(
@@ -205,7 +387,15 @@ def _check_urls(body: str) -> list[Indicator]:
                     message=f"URL uses an IP address instead of a normal domain: {host}",
                 )
             )
-        elif host.count("-") >= 2 or len(host) > 45:
+        elif host.startswith("xn--") or ".xn--" in host:
+            indicators.append(
+                Indicator(
+                    code="punycode_domain",
+                    severity="high",
+                    message=f"URL uses an internationalized/punycode domain: {host}",
+                )
+            )
+        elif host.count("-") >= 2 or len(host) > 45 or _looks_like_university_domain(host):
             indicators.append(
                 Indicator(
                     code="suspicious_url_domain",
@@ -226,17 +416,78 @@ def _check_urls(body: str) -> list[Indicator]:
     return indicators
 
 
-def _count_urls(body: str) -> int:
-    text = _strip_html(body or "")
-    return len(set(URL_RE.findall(f"{body} {text}")))
+def _authentication_result_blocks(headers: str) -> list[str]:
+    blocks: list[str] = []
+    current: list[str] = []
+
+    for line in headers.splitlines():
+        lowered = line.lower()
+        if lowered.startswith(("authentication-results:", "arc-authentication-results:")):
+            if current:
+                blocks.append(" ".join(current))
+            current = [line]
+        elif current and (line.startswith((" ", "\t")) or "=" in line):
+            current.append(line.strip())
+        elif current:
+            blocks.append(" ".join(current))
+            current = []
+
+    if current:
+        blocks.append(" ".join(current))
+
+    return blocks
+
+
+def _parse_authentication_results(blocks: list[str]) -> dict[str, list[dict[str, str]]]:
+    results: dict[str, list[dict[str, str]]] = {"spf": [], "dkim": [], "dmarc": []}
+
+    for block in blocks:
+        lowered = block.lower()
+        for protocol in results:
+            for match in re.finditer(rf"\b{protocol}\s*=\s*([a-z]+)", lowered):
+                result = match.group(1)
+                window = lowered[match.start() : match.start() + 220]
+                domain_match = re.search(r"\b(?:smtp\.mailfrom|header\.d|header\.from)=([^;\s]+)", window)
+                results[protocol].append(
+                    {
+                        "result": result,
+                        "domain": (domain_match.group(1).strip().strip(";") if domain_match else ""),
+                    }
+                )
+
+    return results
+
+
+def _has_auth_alignment_problem(blocks: list[str]) -> bool:
+    for block in blocks:
+        lowered = block.lower()
+        if "dmarc=pass" in lowered and re.search(r"\bheader\.from=[^;\s]+", lowered):
+            continue
+        if re.search(r"\bdmarc\s*=\s*fail\b", lowered):
+            return True
+        if re.search(r"\b(alignment|aligned)\s*=\s*(fail|none|no)\b", lowered):
+            return True
+    return False
 
 
 def _check_attachments(email: EmailAnalysisRequest) -> list[Indicator]:
     indicators: list[Indicator] = []
 
     for attachment in email.attachments:
-        lowered_name = attachment.name.lower()
-        if any(lowered_name.endswith(ext) for ext in HIGH_RISK_EXTENSIONS):
+        lowered_name = _normalize_filename(attachment.name)
+        final_ext = _final_extension(lowered_name)
+        content_type = (attachment.content_type or "").lower()
+
+        double_match = re.search(r"\.(pdf|docx?|xlsx?|pptx?)\.(exe|scr|js|vbs|bat|cmd|ps1)$", lowered_name)
+        if double_match:
+            indicators.append(
+                Indicator(
+                    code="double_extension_attachment",
+                    severity="high",
+                    message=f"Attachment uses a deceptive double extension: {attachment.name}",
+                )
+            )
+        elif final_ext in HIGH_RISK_EXTENSIONS:
             indicators.append(
                 Indicator(
                     code="dangerous_attachment_extension",
@@ -244,12 +495,13 @@ def _check_attachments(email: EmailAnalysisRequest) -> list[Indicator]:
                     message=f"Attachment has a high-risk extension: {attachment.name}",
                 )
             )
-        elif re.search(r"\.(pdf|docx?|xlsx?|pptx?)\.(exe|scr|js|vbs|bat|cmd|ps1)$", lowered_name):
+
+        if _mime_extension_mismatch(final_ext, content_type):
             indicators.append(
                 Indicator(
-                    code="double_extension_attachment",
-                    severity="high",
-                    message=f"Attachment uses a suspicious double extension: {attachment.name}",
+                    code="attachment_mime_mismatch",
+                    severity="medium",
+                    message=f"Attachment type does not match the filename: {attachment.name}",
                 )
             )
 
@@ -261,13 +513,13 @@ def _check_university_impersonation(email: EmailAnalysisRequest) -> list[Indicat
     text = _email_text(email)
     text_without_urls = URL_RE.sub(" ", text)
     sender_domain = _domain_from_address(str(email.sender.email))
-    hosts = _url_hosts(email.body)
+    hosts = _url_hosts(email)
 
     # Catches fake domains like adu-help.com or aduniversity-login.com.
     suspicious_domains = {
         domain
         for domain in {sender_domain, *hosts}
-        if domain and not _is_trusted_domain(domain) and _looks_like_university_domain(domain)
+        if domain and not _is_approved_link_domain(domain) and not _is_approved_sender_domain(domain) and _looks_like_university_domain(domain)
     }
 
     for domain in sorted(suspicious_domains):
@@ -279,7 +531,7 @@ def _check_university_impersonation(email: EmailAnalysisRequest) -> list[Indicat
             )
         )
 
-    has_untrusted_brand = not _is_trusted_domain(sender_domain) and any(
+    has_untrusted_brand = not _is_approved_sender_domain(sender_domain) and any(
         term in text_without_urls for term in UNIVERSITY_BRAND_TERMS
     )
     if has_untrusted_brand:
@@ -294,7 +546,7 @@ def _check_university_impersonation(email: EmailAnalysisRequest) -> list[Indicat
     impersonated_services = _matched_university_services(text)
     if (
         impersonated_services
-        and not _has_trusted_university_context(email)
+        and not _has_trusted_sender_context(email)
         and (suspicious_domains or has_untrusted_brand or _has_account_action_terms(text))
     ):
         indicators.append(
@@ -325,8 +577,8 @@ def _detect_threat_categories(
                     ThreatCategory(
                         code=code,
                         label=label,
-                        confidence="high" if len(matched) >= 2 else "medium",
-                        reason=f"Found phrase: {matched[0]}.",
+                        evidence_strength="high" if len(matched) >= 2 else "medium",
+                        reason=THREAT_CATEGORY_REASON_TEMPLATES[code],
                     )
                 )
 
@@ -336,7 +588,7 @@ def _detect_threat_categories(
             ThreatCategory(
                 code="malware_delivery",
                 label="Malware Delivery",
-                confidence="high",
+                evidence_strength="high",
                 reason="Attachment pattern is commonly used to deliver malware.",
             ),
         )
@@ -355,7 +607,7 @@ def _detect_threat_categories(
                     ThreatCategory(
                         code=service_code,
                         label=label,
-                        confidence="medium",
+                        evidence_strength="medium",
                         reason=f"Message claims to come from {service}.",
                     )
                 )
@@ -375,6 +627,8 @@ def _email_text(email: EmailAnalysisRequest) -> str:
             str(email.sender.email),
             email.reply_to or "",
             _strip_html(email.body or ""),
+            _strip_html(email.body_html or ""),
+            " ".join(f"{link.text} {link.href}" for link in email.links),
         ]
     ).lower()
 
@@ -422,20 +676,15 @@ def _score(
     indicators: list[Indicator],
     ai_prediction: str,
     ai_confidence: float,
-    has_rule_risk: bool,
 ) -> int:
     # Simple score weights for the risk meter.
     severity_weights = {"low": 8, "medium": 18, "high": 30}
     score = sum(severity_weights.get(indicator.severity, 0) for indicator in indicators)
 
-    if ai_prediction == "phishing" and has_rule_risk:
-        score += round(16 * ai_confidence)
+    if ai_prediction == "phishing" and ai_confidence >= 0.75:
+        score += round(24 * ai_confidence)
 
     return max(0, min(score, 100))
-
-
-def _has_rule_risk(indicators: list[Indicator]) -> bool:
-    return any(indicator.severity in {"medium", "high"} for indicator in indicators)
 
 
 def _verdict(score: int) -> str:
@@ -480,34 +729,159 @@ def _domain_from_address(address: str) -> str:
     return parsed.rsplit("@", 1)[1].lower().strip()
 
 
-def _has_trusted_university_context(email: EmailAnalysisRequest) -> bool:
+def _has_trusted_sender_context(email: EmailAnalysisRequest) -> bool:
     sender_domain = _domain_from_address(str(email.sender.email))
-    if _is_trusted_domain(sender_domain):
-        return True
-
-    hosts = _url_hosts(email.body)
-    return bool(hosts) and all(_is_trusted_domain(host) for host in hosts)
+    return _is_approved_sender_domain(sender_domain)
 
 
-def _url_hosts(body: str) -> set[str]:
-    text = _strip_html(body or "")
+def _url_hosts(email: EmailAnalysisRequest) -> set[str]:
     hosts = set()
-    for url in set(URL_RE.findall(f"{body} {text}")):
-        parsed = urlparse(url.rstrip(".,);]"))
+    for link in _collect_links(email):
+        parsed = urlparse(_clean_url(link.href))
         if parsed.hostname:
-            hosts.add(parsed.hostname.lower())
+            hosts.add(_normalize_host(parsed.hostname))
     return hosts
 
 
-def _is_trusted_domain(host: str) -> bool:
+def _is_approved_sender_domain(host: str) -> bool:
     host = (host or "").lower().strip()
-    return any(host == domain or host.endswith(f".{domain}") for domain in TRUSTED_DOMAINS)
+    return any(host == domain or host.endswith(f".{domain}") for domain in APPROVED_SENDER_DOMAINS)
+
+
+def _is_approved_link_domain(host: str) -> bool:
+    host = (host or "").lower().strip()
+    return any(host == domain or host.endswith(f".{domain}") for domain in APPROVED_LINK_DOMAINS)
+
+
+def _is_common_hosting_domain(host: str) -> bool:
+    host = (host or "").lower().strip()
+    return any(host == domain or host.endswith(f".{domain}") for domain in COMMON_HOSTING_DOMAINS)
 
 
 def _is_ip_address(host: str) -> bool:
-    return bool(re.fullmatch(r"\d{1,3}(?:\.\d{1,3}){3}", host))
+    try:
+        ip_address(host)
+        return True
+    except ValueError:
+        return False
 
 
 def _strip_html(value: str) -> str:
     without_tags = re.sub(r"<[^>]+>", " ", value)
     return unescape(without_tags)
+
+
+class _AnchorParser(HTMLParser):
+    def __init__(self) -> None:
+        super().__init__(convert_charrefs=True)
+        self.links: list[LinkInfo] = []
+        self._current_href: str | None = None
+        self._text: list[str] = []
+
+    def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
+        if tag.lower() == "a":
+            attrs_dict = {name.lower(): value for name, value in attrs}
+            self._current_href = attrs_dict.get("href") or ""
+            self._text = []
+
+    def handle_data(self, data: str) -> None:
+        if self._current_href is not None:
+            self._text.append(data)
+
+    def handle_endtag(self, tag: str) -> None:
+        if tag.lower() == "a" and self._current_href:
+            self.links.append(LinkInfo(text=" ".join(self._text).strip()[:500], href=self._current_href.strip()))
+            self._current_href = None
+            self._text = []
+
+
+def _collect_links(email: EmailAnalysisRequest) -> list[LinkInfo]:
+    links = list(email.links)
+
+    html = email.body_html or email.body or ""
+    if "<a" in html.lower():
+        parser = _AnchorParser()
+        try:
+            parser.feed(html)
+            links.extend(parser.links)
+        except Exception:
+            pass
+
+    plain = " ".join([email.body or "", _strip_html(email.body_html or "")])
+    for url in URL_RE.findall(plain):
+        links.append(LinkInfo(text=url[:500], href=url))
+
+    seen: set[str] = set()
+    unique: list[LinkInfo] = []
+    for link in links:
+        clean = _clean_url(link.href)
+        if clean and clean not in seen and clean.lower().startswith(("http://", "https://")):
+            unique.append(LinkInfo(text=(link.text or clean)[:500], href=clean))
+            seen.add(clean)
+    return unique
+
+
+def _clean_url(url: str) -> str:
+    return (url or "").strip().rstrip(".,);]")
+
+
+def _normalize_host(host: str) -> str:
+    host = (host or "").strip().strip(".").lower()
+    try:
+        return host.encode("idna").decode("ascii")
+    except UnicodeError:
+        return host
+
+
+def _displayed_host(text: str) -> str:
+    text = (text or "").strip()
+    if not text:
+        return ""
+    match = URL_RE.search(text)
+    if match:
+        return _normalize_host(urlparse(_clean_url(match.group(0))).hostname or "")
+    if re.fullmatch(r"(?:[a-z0-9-]+\.)+[a-z]{2,}", text.lower()):
+        return _normalize_host(text)
+    return ""
+
+
+def _same_registrable_domain(left: str, right: str) -> bool:
+    return _simple_registrable_domain(left) == _simple_registrable_domain(right)
+
+
+def _simple_registrable_domain(host: str) -> str:
+    parts = _normalize_host(host).split(".")
+    if len(parts) <= 2:
+        return ".".join(parts)
+    if parts[-2] in {"ac", "edu", "co", "com", "net", "org"} and len(parts) >= 3:
+        return ".".join(parts[-3:])
+    return ".".join(parts[-2:])
+
+
+def _normalize_filename(name: str) -> str:
+    return (name or "").strip().strip(".").lower().replace("\u202e", "")
+
+
+def _final_extension(name: str) -> str:
+    match = re.search(r"(\.[a-z0-9]+)$", name)
+    return match.group(1) if match else ""
+
+
+def _mime_extension_mismatch(ext: str, content_type: str) -> bool:
+    if not content_type or not ext:
+        return False
+    expected = {
+        ".pdf": "application/pdf",
+        ".doc": "msword",
+        ".docx": "wordprocessingml",
+        ".xls": "excel",
+        ".xlsx": "spreadsheetml",
+        ".ppt": "powerpoint",
+        ".pptx": "presentationml",
+        ".jpg": "image/jpeg",
+        ".jpeg": "image/jpeg",
+        ".png": "image/png",
+        ".txt": "text/plain",
+    }
+    marker = expected.get(ext)
+    return bool(marker and marker not in content_type)

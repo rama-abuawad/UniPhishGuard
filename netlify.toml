@@ -1,0 +1,7 @@
+[build]
+  publish = "outlook-addin"
+
+[[headers]]
+  for = "/*"
+  [headers.values]
+    Cache-Control = "no-store"

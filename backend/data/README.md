@@ -25,14 +25,14 @@ make the text model less dependent on only our generated examples.
 Retrain after changing the dataset:
 
 ```powershell
-cd C:\Users\rama\UniPhishGuard\backend
+cd backend
 python train_model.py
 ```
 
 To rebuild the generated dataset:
 
 ```powershell
-cd C:\Users\rama\UniPhishGuard\backend
+cd backend
 python generate_training_data.py
 python train_model.py
 ```

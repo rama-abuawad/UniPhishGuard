@@ -3,11 +3,14 @@ from __future__ import annotations
 import json
 import sqlite3
 from pathlib import Path
+from datetime import datetime, timedelta, timezone
 
 from .models import EmailAnalysisRequest, EmailAnalysisResponse, HistoryItem
 
 
 DB_PATH = Path(__file__).resolve().parents[1] / "data" / "uniphishguard.db"
+HISTORY_LIMIT = 50
+RETENTION_DAYS = 30
 
 
 def init_db() -> None:
@@ -21,6 +24,7 @@ def init_db() -> None:
                 scanned_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
                 subject TEXT NOT NULL,
                 sender TEXT NOT NULL,
+                user_id TEXT NOT NULL DEFAULT 'local',
                 verdict TEXT NOT NULL,
                 risk_score INTEGER NOT NULL,
                 ai_prediction TEXT NOT NULL,
@@ -30,9 +34,13 @@ def init_db() -> None:
             )
             """
         )
+        columns = {row[1] for row in conn.execute("PRAGMA table_info(scans)").fetchall()}
+        if "user_id" not in columns:
+            conn.execute("ALTER TABLE scans ADD COLUMN user_id TEXT NOT NULL DEFAULT 'local'")
+        _cleanup_old_scans(conn)
 
 
-def save_scan(email: EmailAnalysisRequest, result: EmailAnalysisResponse) -> tuple[int, str]:
+def save_scan(email: EmailAnalysisRequest, result: EmailAnalysisResponse, user_id: str = "local") -> tuple[int, str]:
     init_db()
 
     indicators = [indicator.model_dump() for indicator in result.indicators]
@@ -42,6 +50,7 @@ def save_scan(email: EmailAnalysisRequest, result: EmailAnalysisResponse) -> tup
             INSERT INTO scans (
                 subject,
                 sender,
+                user_id,
                 verdict,
                 risk_score,
                 ai_prediction,
@@ -49,11 +58,12 @@ def save_scan(email: EmailAnalysisRequest, result: EmailAnalysisResponse) -> tup
                 indicator_count,
                 indicators_json
             )
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
-                email.subject[:200],
-                str(email.sender.email)[:200],
+                _redact_subject(email.subject),
+                _redact_sender(str(email.sender.email)),
+                user_id[:160],
                 result.verdict,
                 result.risk_score,
                 result.ai_prediction,
@@ -68,21 +78,25 @@ def save_scan(email: EmailAnalysisRequest, result: EmailAnalysisResponse) -> tup
             (scan_id,),
         ).fetchone()[0]
 
+        _trim_user_history(conn, user_id)
+
     return scan_id, scanned_at
 
 
-def get_history(limit: int = 10) -> list[HistoryItem]:
+def get_history(user_id: str = "local", limit: int = 10) -> list[HistoryItem]:
     init_db()
+    limit = min(max(limit, 1), HISTORY_LIMIT)
 
     with sqlite3.connect(DB_PATH) as conn:
         rows = conn.execute(
             """
             SELECT id, scanned_at, subject, sender, verdict, risk_score, indicator_count
             FROM scans
+            WHERE user_id = ?
             ORDER BY id DESC
             LIMIT ?
             """,
-            (limit,),
+            (user_id[:160], limit),
         ).fetchall()
 
     return [
@@ -97,3 +111,37 @@ def get_history(limit: int = 10) -> list[HistoryItem]:
         )
         for row in rows
     ]
+
+
+def _redact_subject(subject: str) -> str:
+    subject = (subject or "").strip()
+    return subject[:120] if subject else "(No subject)"
+
+
+def _redact_sender(sender: str) -> str:
+    sender = (sender or "").strip()
+    if "@" not in sender:
+        return sender[:120]
+    name, domain = sender.rsplit("@", 1)
+    return f"{name[:2]}***@{domain[:100]}"
+
+
+def _cleanup_old_scans(conn: sqlite3.Connection) -> None:
+    cutoff = datetime.now(timezone.utc) - timedelta(days=RETENTION_DAYS)
+    conn.execute("DELETE FROM scans WHERE scanned_at < ?", (cutoff.strftime("%Y-%m-%d %H:%M:%S"),))
+
+
+def _trim_user_history(conn: sqlite3.Connection, user_id: str) -> None:
+    conn.execute(
+        """
+        DELETE FROM scans
+        WHERE user_id = ?
+          AND id NOT IN (
+            SELECT id FROM scans
+            WHERE user_id = ?
+            ORDER BY id DESC
+            LIMIT ?
+          )
+        """,
+        (user_id[:160], user_id[:160], HISTORY_LIMIT),
+    )

@@ -12,12 +12,20 @@ class AttachmentInfo(BaseModel):
     size: int | None = Field(default=None, ge=0)
 
 
+class LinkInfo(BaseModel):
+    text: str = ""
+    href: str
+
+
 class EmailAnalysisRequest(BaseModel):
     subject: str = ""
     sender: EmailAddress
     reply_to: str | None = None
     body: str = ""
+    body_html: str | None = None
     headers: str = ""
+    headers_status: str = Field(default="checked", pattern="^(checked|not_available|failed)$")
+    links: list[LinkInfo] = Field(default_factory=list)
     attachments: list[AttachmentInfo] = Field(default_factory=list)
 
 
@@ -30,7 +38,7 @@ class Indicator(BaseModel):
 class ThreatCategory(BaseModel):
     code: str
     label: str
-    confidence: str
+    evidence_strength: str
     reason: str
 
 

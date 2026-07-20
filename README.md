@@ -30,22 +30,22 @@ Outlook Email
 ### Outlook Add-in
 
 - Outlook task pane with a Scan Email button
-- Reads the opened email subject, sender, Reply-To, body, headers, links, and attachments
+- Reads the opened email subject, sender, Reply-To, plain text, HTML links, headers, and attachment metadata
 - Browser preview mode with sample email data for quick testing
-- Report to IT summary generator inside the task pane
-- Scan history view for recent email checks
+- Copy IT report summary inside the task pane
+- Per-user scan history view for recent email checks
 
 ### Backend Analysis
 
 - FastAPI `/analyze-email` endpoint
 - Rule-based phishing indicators
-- AI text prediction with confidence score
+- AI text prediction with a capped score contribution
 - Sender and Reply-To mismatch detection
 - SPF, DKIM, and DMARC authentication parsing
 - Clear authentication warnings, including user-friendly DKIM explanations
-- Suspicious URL checks, including IP-address links and unusual domains
-- Attachment checks for dangerous extensions and double-extension files
-- Local SQLite scan history without storing full email bodies
+- Suspicious URL checks, including hidden href mismatches, IP-address links, shorteners, encoded URLs, and unusual domains
+- Attachment checks for dangerous extensions, double-extension files, and MIME/extension mismatches
+- Local SQLite scan history without storing full email bodies and with reduced sender data
 
 ### Phishing Category Detection
 
@@ -58,15 +58,15 @@ Outlook Email
 - Malware Delivery
 - Microsoft Login Scam
 
-Categories are only shown when there is real suspicious context, so normal
-emails that mention words like internship, scholarship, HR, or Microsoft 365 are
-not marked suspicious just because of those keywords.
+Categories are shown as rule-based evidence strength, not calibrated confidence.
+Normal emails that mention words like internship, scholarship, HR, or Microsoft
+365 are not marked suspicious just because of those keywords.
 
 ### University-Specific Detection
 
-- Trusted university and Microsoft domain whitelist
+- ADU-controlled sender trust list
 - ADU domain checks for `adu.ac.ae`, `info.adu.ac.ae`, and `students.adu.ac.ae`
-- ADU SharePoint/OneDrive link trust for legitimate student file links
+- ADU SharePoint/OneDrive link context without automatically trusting external senders
 - Fake ADU lookalike detection, such as `adu-help.com` or `aduniversity-login.com`
 - Fake campus-service detection for:
   - HR
@@ -88,6 +88,20 @@ not marked suspicious just because of those keywords.
 
 ## Quick Start
 
+One-command local setup:
+
+```powershell
+.\setup.ps1
+.\start-dev.ps1
+```
+
+This starts:
+
+```text
+Backend health check: https://localhost:8000/health
+Add-in browser preview: https://localhost:3000/taskpane.html
+```
+
 ### Backend
 
 ```powershell
@@ -99,6 +113,8 @@ uvicorn app.main:app --reload --port 8000
 ```
 
 Open `http://127.0.0.1:8000/docs` to test the API.
+Copy `backend/.env.example` for production settings such as CORS, request
+limits, temporary token auth, or Microsoft Entra token validation.
 
 Train or retrain the AI text model:
 
@@ -140,4 +156,15 @@ Then validate and sideload the manifest:
 cd outlook-addin
 npm run validate
 npm run sideload
+```
+
+Run automated checks:
+
+```powershell
+cd backend
+python -m pytest
+
+cd ..\outlook-addin
+npm.cmd test
+npm.cmd run test:e2e
 ```

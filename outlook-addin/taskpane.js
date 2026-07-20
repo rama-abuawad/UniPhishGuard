@@ -1,7 +1,12 @@
 const params = new URLSearchParams(window.location.search);
-const API_BASE_URLS = params.get("api")
-  ? [params.get("api").replace(/\/analyze-email\/?$/, "")]
-  : ["https://localhost:8000"];
+const configuredApi = window.UNIPHISHGUARD_API_BASE_URL || "https://localhost:8000";
+const devApi = window.UNIPHISHGUARD_ALLOW_API_OVERRIDE && params.get("api")
+  ? params.get("api").replace(/\/analyze-email\/?$/, "")
+  : null;
+const fallbackApis = window.UNIPHISHGUARD_API_FALLBACK_URLS || [];
+const API_BASE_URLS = [devApi || configuredApi, ...fallbackApis].filter(Boolean);
+const API_TOKEN = window.UNIPHISHGUARD_API_TOKEN || "";
+const helpers = window.UniPhishGuardHelpers;
 
 const scanButton = document.getElementById("scanButton");
 const historyButton = document.getElementById("historyButton");
@@ -30,12 +35,12 @@ async function scanCurrentEmail() {
     const email = await getCurrentEmail();
     const response = await fetch(`${apiBaseUrl}/analyze-email`, {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
+      headers: await apiHeaders(),
       body: JSON.stringify(email),
     });
 
     if (!response.ok) {
-      throw new Error(`Backend returned ${response.status}`);
+      throw makeHttpError(response.status);
     }
 
     renderReport(await response.json());
@@ -53,10 +58,12 @@ async function loadHistory() {
 
   try {
     const apiBaseUrl = await findBackend();
-    const response = await fetch(`${apiBaseUrl}/history`);
+    const response = await fetch(`${apiBaseUrl}/history`, {
+      headers: await apiHeaders(false),
+    });
 
     if (!response.ok) {
-      throw new Error(`Backend returned ${response.status}`);
+      throw makeHttpError(response.status);
     }
 
     renderHistory(await response.json());
@@ -96,8 +103,10 @@ async function getCurrentEmail() {
   }
 
   const body = await getBodyText(item);
-  const headers = await getInternetHeaders(item);
+  const bodyHtml = await getBodyHtml(item);
+  const headerResult = await getInternetHeaders(item);
   const sender = item.from || item.sender || {};
+  const links = extractLinks(bodyHtml, body);
 
   return {
     subject: item.subject || "",
@@ -107,13 +116,28 @@ async function getCurrentEmail() {
     },
     reply_to: getReplyTo(item),
     body,
-    headers,
+    body_html: bodyHtml,
+    headers: headerResult.value,
+    headers_status: headerResult.status,
+    links,
     attachments: (item.attachments || []).map((attachment) => ({
       name: attachment.name,
       content_type: attachment.contentType || null,
       size: attachment.size || null,
     })),
   };
+}
+
+function getBodyHtml(item) {
+  return new Promise((resolve) => {
+    item.body.getAsync(Office.CoercionType.Html, (result) => {
+      if (result.status === Office.AsyncResultStatus.Succeeded) {
+        resolve(result.value || "");
+      } else {
+        resolve("");
+      }
+    });
+  });
 }
 
 function getBodyText(item) {
@@ -130,19 +154,25 @@ function getBodyText(item) {
 
 function getInternetHeaders(item) {
   return new Promise((resolve) => {
-    if (!item.getAllInternetHeadersAsync) {
-      resolve("");
+    const mailbox = Office.context?.mailbox;
+    const supported = Office.context?.requirements?.isSetSupported?.("Mailbox", "1.8");
+    if (!supported || !item.getAllInternetHeadersAsync || !mailbox) {
+      resolve({ value: "", status: "not_available" });
       return;
     }
 
     item.getAllInternetHeadersAsync((result) => {
       if (result.status === Office.AsyncResultStatus.Succeeded) {
-        resolve(result.value || "");
+        resolve({ value: result.value || "", status: "checked" });
       } else {
-        resolve("");
+        resolve({ value: "", status: "failed" });
       }
     });
   });
+}
+
+function extractLinks(html, text) {
+  return helpers.extractLinks(html, text);
 }
 
 function getReplyTo(item) {
@@ -234,7 +264,7 @@ function renderReport(report) {
       <p class="section-title">What Should You Do?</p>
       <ul class="list">${actions}</ul>
 
-      <button class="report-button" type="button" onclick="prepareItReport()">Report to IT</button>
+      <button class="report-button" type="button" onclick="prepareItReport()">Copy IT Report</button>
     </article>
   `;
 }
@@ -266,7 +296,7 @@ function renderThreatCategories(categories) {
   return categories.map((category) => `
     <div class="category-chip">
       <strong>${escapeHtml(category.label)}</strong>
-      <span>${escapeHtml(category.confidence)} confidence</span>
+      <span>${escapeHtml(helpers.categoryEvidence(category))} evidence</span>
       <small>${escapeHtml(category.reason)}</small>
     </div>
   `).join("");
@@ -274,15 +304,17 @@ function renderThreatCategories(categories) {
 
 function renderError(error) {
   lastReport = null;
+  const detail = classifyError(error);
   resultEl.innerHTML = `
     <div class="error">
-      <strong>Scan failed.</strong><br>
-      ${escapeHtml(error.message || "Check that the FastAPI backend is running over HTTPS.")}
+      <strong>${escapeHtml(detail.title)}</strong><br>
+      ${escapeHtml(detail.message)}
+      <p class="meta">Code: ${escapeHtml(detail.code)}</p>
     </div>
   `;
 }
 
-function prepareItReport() {
+async function prepareItReport() {
   if (!lastReport) {
     return;
   }
@@ -292,29 +324,30 @@ function prepareItReport() {
     existingReport.remove();
   }
 
-  const indicatorLines = lastReport.indicators.length
-    ? lastReport.indicators
-        .map((indicator) => `- ${escapeHtml(indicator.severity.toUpperCase())}: ${escapeHtml(indicator.message)}`)
-        .join("<br>")
-    : "- No major indicators found";
-  const categoryLines = (lastReport.threat_categories || []).length
-    ? lastReport.threat_categories
-        .map((category) => `- ${escapeHtml(category.label)} (${escapeHtml(category.confidence)})`)
-        .join("<br>")
-    : "- No specific category detected";
   const threatLevel = normalizeThreatLevel(lastReport);
+  const reportText = helpers.buildReportText({ ...lastReport, threat_level: threatLevel });
+  const categoryLines = reportText.split("Threat categories:\n")[1].split("\nIndicators:")[0];
+  const indicatorLines = reportText.split("\nIndicators:\n")[1];
+
+  let copied = false;
+  try {
+    await navigator.clipboard.writeText(reportText);
+    copied = true;
+  } catch (error) {
+    copied = false;
+  }
 
   resultEl.insertAdjacentHTML("beforeend", `
     <div id="itReport" class="it-report">
-      <p class="section-title">IT Report Prepared</p>
-      <p class="meta">Use this summary when reporting the email to university IT.</p>
+      <p class="section-title">IT Report ${copied ? "Copied" : "Prepared"}</p>
+      <p class="meta">${copied ? "Paste this into the approved ADU IT reporting channel." : "Copy this summary into the approved ADU IT reporting channel."}</p>
       <div class="report-summary">
         <strong>Verdict:</strong> ${escapeHtml(lastReport.verdict)}<br>
         <strong>Threat level:</strong> ${escapeHtml(threatLevel.label)}<br>
         <strong>Risk score:</strong> ${lastReport.risk_score}/100<br>
         <strong>AI confidence:</strong> ${Math.round(lastReport.ai_confidence * 100)}%<br>
-        <strong>Threat categories:</strong><br>${categoryLines}<br>
-        <strong>Indicators:</strong><br>${indicatorLines}
+        <strong>Threat categories:</strong><br>${escapeHtml(categoryLines).replace(/\n/g, "<br>")}<br>
+        <strong>Indicators:</strong><br>${escapeHtml(indicatorLines).replace(/\n/g, "<br>")}
       </div>
     </div>
   `);
@@ -333,9 +366,52 @@ function sampleEmail() {
     sender: { name: "ADU IT Helpdesk", email: "support@adu-help.com" },
     reply_to: "support@adu-help.com",
     body: "Click http://192.168.1.10/login or https://aduniversity-login.com/office to verify your Microsoft 365 password.",
+    body_html: '<p>Click <a href="https://aduniversity-login.com/office">ADU Portal</a> to verify your Microsoft 365 password.</p>',
     headers: "Authentication-Results: spf=pass dkim=pass dmarc=fail",
+    headers_status: "checked",
+    links: [{ text: "ADU Portal", href: "https://aduniversity-login.com/office" }],
     attachments: [{ name: "invoice.pdf.exe", content_type: "application/octet-stream", size: 42100 }],
   };
+}
+
+async function apiHeaders(includeJson = true) {
+  const headers = includeJson ? { "Content-Type": "application/json" } : {};
+  const token = API_TOKEN || await getOfficeAccessToken();
+  if (token) {
+    headers.Authorization = `Bearer ${token}`;
+  }
+  headers["X-UniPhishGuard-User"] = getMailboxUser();
+  return headers;
+}
+
+async function getOfficeAccessToken() {
+  if (!Office.context?.auth?.getAccessTokenAsync) {
+    return "";
+  }
+
+  return new Promise((resolve) => {
+    Office.context.auth.getAccessTokenAsync({ allowSignInPrompt: true }, (result) => {
+      if (result.status === Office.AsyncResultStatus.Succeeded) {
+        resolve(result.value || "");
+      } else {
+        resolve("");
+      }
+    });
+  });
+}
+
+function getMailboxUser() {
+  return Office.context?.mailbox?.userProfile?.emailAddress || "local";
+}
+
+function makeHttpError(status) {
+  const error = new Error(`Backend returned ${status}`);
+  error.status = status;
+  return error;
+}
+
+function classifyError(error) {
+  return helpers.classifyError(error);
 }
 
 function escapeHtml(value) {

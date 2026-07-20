@@ -5,7 +5,7 @@ FastAPI backend used by the Outlook add-in.
 ## Install
 
 ```powershell
-cd C:\Users\rama\UniPhishGuard\backend
+cd backend
 python -m pip install -r requirements.txt
 ```
 
@@ -74,6 +74,6 @@ https://localhost:8000/health
 The certificate files are created by:
 
 ```powershell
-cd C:\Users\rama\UniPhishGuard\outlook-addin
+cd outlook-addin
 npm run certs
 ```

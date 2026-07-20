@@ -208,6 +208,7 @@ node_modules/
 npm-debug.log*
 yarn-debug.log*
 yarn-error.log*
+outlook-addin/test-results/
 
 # Local UniPhishGuard scan data
 backend/data/*.db

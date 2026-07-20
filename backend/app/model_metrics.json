@@ -1,11 +1,13 @@
 {
-  "dataset_size": 11000,
+  "raw_dataset_size": 11000,
+  "dataset_size": 10036,
+  "exact_duplicates_removed": 964,
   "sources": {
     "generated_university_examples": "data\\training_emails.csv",
     "kd_10000_dataset": "data\\phishing_legit_dataset_KD_10000.csv"
   },
-  "train_size": 8250,
-  "test_size": 2750,
+  "train_size": 7527,
+  "test_size": 2509,
   "labels": [
     "legitimate",
     "phishing"
@@ -13,38 +15,43 @@
   "classification_report": {
     "legitimate": {
       "precision": 1.0,
-      "recall": 1.0,
-      "f1-score": 1.0,
-      "support": 1125.0
+      "recall": 0.997997997997998,
+      "f1-score": 0.998997995991984,
+      "support": 999.0
     },
     "phishing": {
-      "precision": 1.0,
+      "precision": 0.9986772486772487,
       "recall": 1.0,
-      "f1-score": 1.0,
-      "support": 1625.0
+      "f1-score": 0.99933818663137,
+      "support": 1510.0
     },
-    "accuracy": 1.0,
+    "accuracy": 0.9992028696691909,
     "macro avg": {
-      "precision": 1.0,
-      "recall": 1.0,
-      "f1-score": 1.0,
-      "support": 2750.0
+      "precision": 0.9993386243386244,
+      "recall": 0.998998998998999,
+      "f1-score": 0.9991680913116769,
+      "support": 2509.0
     },
     "weighted avg": {
-      "precision": 1.0,
-      "recall": 1.0,
-      "f1-score": 1.0,
-      "support": 2750.0
+      "precision": 0.9992039240743904,
+      "recall": 0.9992028696691909,
+      "f1-score": 0.9992027340810525,
+      "support": 2509.0
     }
   },
   "confusion_matrix": [
     [
-      1125,
-      0
+      997,
+      2
     ],
     [
       0,
-      1625
+      1510
     ]
-  ]
+  ],
+  "runtime": {
+    "python": "3.14.3",
+    "scikit_learn": "1.9.0",
+    "joblib": "1.5.3"
+  }
 }

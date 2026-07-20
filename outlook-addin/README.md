@@ -12,7 +12,7 @@ This folder has the Outlook add-in files.
 ## Install Tooling
 
 ```powershell
-cd C:\Users\rama\UniPhishGuard\outlook-addin
+cd outlook-addin
 npm install
 npm run certs
 ```
@@ -40,3 +40,13 @@ The sideload command uses `--no-debug`, so Outlook should not show the debug
 handler popup each time.
 
 Keep the backend running at `https://localhost:8000` while testing.
+
+## Automated Tests
+
+```powershell
+npm.cmd test
+npm.cmd run test:e2e
+```
+
+The E2E suite opens the task pane in Edge, scans the sample email, checks
+history rendering, and verifies the backend-offline error state.

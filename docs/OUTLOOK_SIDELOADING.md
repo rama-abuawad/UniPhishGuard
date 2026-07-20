@@ -6,14 +6,14 @@ That is why we test the page in the browser first and then sideload it.
 ## 1. Install Backend Dependencies
 
 ```powershell
-cd C:\Users\rama\UniPhishGuard\backend
+cd backend
 python -m pip install -r requirements.txt
 ```
 
 ## 2. Install Add-in Dependencies and HTTPS Certificates
 
 ```powershell
-cd C:\Users\rama\UniPhishGuard\outlook-addin
+cd outlook-addin
 npm install
 npm run certs
 ```
@@ -23,14 +23,14 @@ Accept the certificate prompt if Windows asks. Outlook needs HTTPS.
 ## 3. Start the Backend Over HTTPS
 
 ```powershell
-cd C:\Users\rama\UniPhishGuard\backend
+cd backend
 .\run_https.ps1
 ```
 
 If you are using Command Prompt instead of PowerShell:
 
 ```cmd
-cd C:\Users\rama\UniPhishGuard\backend
+cd backend
 run_https.cmd
 ```
 
@@ -54,7 +54,7 @@ This checks that the backend is running and Edge trusts the local certificate.
 Open a second PowerShell window:
 
 ```powershell
-cd C:\Users\rama\UniPhishGuard\outlook-addin
+cd outlook-addin
 npm run start
 ```
 
@@ -69,7 +69,7 @@ https://localhost:3000/taskpane.html
 Open a third PowerShell window:
 
 ```powershell
-cd C:\Users\rama\UniPhishGuard\outlook-addin
+cd outlook-addin
 npm run validate
 ```
 
@@ -78,7 +78,7 @@ npm run validate
 Try the automated sideload command:
 
 ```powershell
-cd C:\Users\rama\UniPhishGuard\outlook-addin
+cd outlook-addin
 npm run sideload
 ```
 

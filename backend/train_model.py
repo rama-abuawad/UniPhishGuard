@@ -1,8 +1,10 @@
 import csv
 import json
+import platform
 from pathlib import Path
 
 import joblib
+import sklearn
 from sklearn.feature_extraction.text import TfidfVectorizer
 from sklearn.metrics import classification_report, confusion_matrix
 from sklearn.model_selection import train_test_split
@@ -39,8 +41,26 @@ def load_dataset() -> tuple[list[str], list[str]]:
     return texts, labels
 
 
+def dedupe_dataset(texts: list[str], labels: list[str]) -> tuple[list[str], list[str], int]:
+    seen: dict[str, str] = {}
+    deduped_texts: list[str] = []
+    deduped_labels: list[str] = []
+
+    for text, label in zip(texts, labels):
+        key = " ".join(text.lower().split())
+        if key in seen:
+            continue
+        seen[key] = label
+        deduped_texts.append(text)
+        deduped_labels.append(label)
+
+    return deduped_texts, deduped_labels, len(texts) - len(deduped_texts)
+
+
 def train() -> None:
     texts, labels = load_dataset()
+    raw_size = len(texts)
+    texts, labels, duplicate_count = dedupe_dataset(texts, labels)
     train_texts, test_texts, train_labels, test_labels = train_test_split(
         texts,
         labels,
@@ -68,7 +88,9 @@ def train() -> None:
     matrix = confusion_matrix(test_labels, predictions, labels=["legitimate", "phishing"]).tolist()
 
     metrics = {
+        "raw_dataset_size": raw_size,
         "dataset_size": len(texts),
+        "exact_duplicates_removed": duplicate_count,
         "sources": {
             "generated_university_examples": str(DATASET_PATH.relative_to(ROOT)),
             "kd_10000_dataset": str(KD_DATASET_PATH.relative_to(ROOT)),
@@ -78,6 +100,11 @@ def train() -> None:
         "labels": ["legitimate", "phishing"],
         "classification_report": report,
         "confusion_matrix": matrix,
+        "runtime": {
+            "python": platform.python_version(),
+            "scikit_learn": sklearn.__version__,
+            "joblib": joblib.__version__,
+        },
     }
 
     joblib.dump(model, MODEL_PATH)
