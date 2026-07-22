@@ -65,7 +65,17 @@ def explain_email_risk(email: EmailAnalysisRequest) -> list[str]:
 
 def _model_text(email: EmailAnalysisRequest) -> str:
     links = " ".join(f"{link.text} {link.href}" for link in email.links)
-    return f"{email.subject} {email.body} {email.body_html or ''} {links}"[:MAX_MODEL_TEXT]
+    text = f"{email.subject} {email.body} {email.body_html or ''} {links}".lower()
+    # Outlook/Exchange may inject generic external-sender warnings. They describe
+    # the organization boundary, not the sender's intent, so exclude them from ML.
+    for phrase in (
+        "external email: this email originated from outside the organization",
+        "do not click links, provide information or open attachments unless you can confirm the sender",
+        "this sender is from outside your organization",
+        "you don't often get email from",
+    ):
+        text = text.replace(phrase, " ")
+    return " ".join(text.split())[:MAX_MODEL_TEXT]
 
 
 def _check_model_metadata() -> None:

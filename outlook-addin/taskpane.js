@@ -307,19 +307,17 @@ function renderReport(report) {
   const threatLevel = normalizeThreatLevel(report);
   const verdictClass = threatLevelClassName(threatLevel.code, report.verdict);
   const threatColor = safeColor(threatLevel.color);
-  const confidencePercent = Math.round(report.ai_confidence * 100);
   const reputationStatus = report.url_reputation_status === "checked"
     ? `${report.url_reputation_checked || 0} URL(s) checked externally`
     : report.url_reputation_status === "unavailable"
       ? "external service unavailable"
-      : "not configured";
-  const categories = renderThreatCategories(report.threat_categories || []);
-  const breakdown = renderScoreBreakdown(report.score_breakdown || []);
-  const topReasons = renderSimpleList(report.top_reasons || [], "No strong reason found.");
-  const aiEvidence = renderSimpleList(report.ai_evidence || [], "No specific suspicious language found.");
-  const attachmentHashes = renderSimpleList(report.attachment_hashes || [], "No attachment content hash available.");
-  const qrLinks = renderQrLinks(report.decoded_qr_links || []);
-  const groupedIndicators = renderIndicatorSections(report.indicators || []);
+      : "";
+  const importantIndicators = (report.indicators || []).filter((indicator) => ["high", "medium"].includes(indicator.severity));
+  const categories = report.risk_score >= 25 ? renderThreatCategories(report.threat_categories || []) : "";
+  const topReasons = renderSimpleList(report.top_reasons || [], "");
+  const categorySection = categories ? `<p class="section-title">Threat Category</p><div class="category-list">${categories}</div>` : "";
+  const reasonSection = (report.top_reasons || []).length ? `<p class="section-title">Why it was flagged</p><ul class="list">${topReasons}</ul>` : "";
+  const reputationLine = reputationStatus ? `<p class="meta">URL reputation: ${escapeHtml(reputationStatus)}</p>` : "";
 
   const actions = report.recommended_actions
     .map((action) => `<li>${escapeHtml(action)}</li>`)
@@ -335,8 +333,7 @@ function renderReport(report) {
           </span>
           <h2>${escapeHtml(report.verdict)}</h2>
           <p class="meta">Scan #${escapeHtml(report.scan_id || "-")} ${escapeHtml(report.scanned_at || "")}</p>
-          <p class="meta">AI language check: ${formatPrediction(report.ai_prediction)} - ${confidencePercent}% phishing probability</p>
-          <p class="meta">URL reputation: ${escapeHtml(reputationStatus)}</p>
+          ${reputationLine}
         </div>
         <div class="score">${report.risk_score}</div>
       </div>
@@ -351,16 +348,6 @@ function renderReport(report) {
         </div>
       </div>
 
-      <div class="meter-block">
-        <div class="meter-row">
-          <span>AI phishing probability</span>
-          <strong>${confidencePercent}%</strong>
-        </div>
-        <div class="meter">
-          <span class="meter-fill ai-fill" style="width: ${clampPercent(confidencePercent)}%"></span>
-        </div>
-      </div>
-
       <div class="summary-grid">
         <div class="summary-item">
           <span class="summary-label">Links Found</span>
@@ -372,29 +359,12 @@ function renderReport(report) {
         </div>
         <div class="summary-item">
           <span class="summary-label">Risk Indicators</span>
-          <span class="summary-value">${report.indicators.length}</span>
+          <span class="summary-value">${importantIndicators.length}</span>
         </div>
       </div>
 
-      <p class="section-title">Threat Category</p>
-      <div class="category-list">${categories}</div>
-
-      <p class="section-title">Score Breakdown</p>
-      <div class="breakdown-list">${breakdown}</div>
-
-      <p class="section-title">Strongest Reasons</p>
-      <ul class="list">${topReasons}</ul>
-
-      <p class="section-title">AI Language Assessment</p>
-      <ul class="list">${aiEvidence}</ul>
-
-      <p class="section-title">Attachment Hashes</p>
-      <ul class="list">${attachmentHashes}</ul>
-
-      <p class="section-title">Decoded QR Links</p>
-      <ul class="list">${qrLinks}</ul>
-
-      ${groupedIndicators}
+      ${categorySection}
+      ${reasonSection}
 
       <p class="section-title">What Should You Do?</p>
       <ul class="list">${actions}</ul>
@@ -437,70 +407,10 @@ function renderThreatCategories(categories) {
   `).join("");
 }
 
-function renderScoreBreakdown(items) {
-  if (!items.length) {
-    return '<p class="empty-inline">No score components added.</p>';
-  }
-
-  return items.map((item) => `
-    <div class="breakdown-item">
-      <span>${escapeHtml(item.label)}</span>
-      <strong>${escapeHtml(item.score)}/${escapeHtml(item.cap)}</strong>
-    </div>
-  `).join("");
-}
-
 function renderSimpleList(items, emptyText) {
   return items.length
     ? items.map((item) => `<li class="low">${escapeHtml(item)}</li>`).join("")
-    : `<li>${escapeHtml(emptyText)}</li>`;
-}
-
-function renderQrLinks(links) {
-  return links.length
-    ? links.map((link) => `<li class="medium">${escapeHtml(link.href)}</li>`).join("")
-    : "<li>No QR link found.</li>";
-}
-
-function renderIndicatorSections(indicators) {
-  const groups = [
-    ["Sender Authentication", ["spf_", "dkim_", "dmarc_", "auth_", "forwarding_"]],
-    ["URL Analysis", ["url_", "link_", "approved_domain", "external_sender"]],
-    ["Attachment Analysis", ["attachment", "double_extension", "dangerous_attachment", "macro_", "archive_"]],
-    ["Sender and University Checks", ["reply_to", "university_", "untrusted_", "fake_university"]],
-  ];
-
-  const used = new Set();
-  const sections = groups.map(([title, prefixes]) => {
-    const matches = indicators.filter((indicator) => {
-      const matched = prefixes.some((prefix) => indicator.code.startsWith(prefix));
-      if (matched) {
-        used.add(indicator);
-      }
-      return matched;
-    });
-    return renderIndicatorSection(title, matches);
-  });
-
-  const other = indicators.filter((indicator) => !used.has(indicator));
-  sections.push(renderIndicatorSection("Other Evidence", other));
-  return sections.join("");
-}
-
-function renderIndicatorSection(title, indicators) {
-  const body = indicators.length
-    ? indicators.map((indicator) => `
-      <li class="${escapeHtml(indicator.severity)}">
-        <strong>${escapeHtml(indicator.severity.toUpperCase())}</strong><br>
-        ${escapeHtml(indicator.message)}
-      </li>
-    `).join("")
-    : "<li>No issue found in this section.</li>";
-
-  return `
-    <p class="section-title">${escapeHtml(title)}</p>
-    <ul class="list">${body}</ul>
-  `;
+    : emptyText ? `<li>${escapeHtml(emptyText)}</li>` : "";
 }
 
 function renderError(error) {
@@ -640,36 +550,19 @@ function categoryEvidence(category) {
 
 function buildReportText(report) {
   const threatLevel = report.threat_level || { label: "Unknown" };
-  const categories = (report.threat_categories || []).length
+  const categories = report.risk_score >= 25 && (report.threat_categories || []).length
     ? report.threat_categories.map((category) => `- ${category.label} (${categoryEvidence(category)} evidence)`).join("\n")
     : "- No specific category detected";
-  const indicators = (report.indicators || []).length
-    ? report.indicators.map((indicator) => `- ${String(indicator.severity || "").toUpperCase()}: ${indicator.message}`).join("\n")
+  const importantIndicators = (report.indicators || []).filter((indicator) => ["high", "medium"].includes(indicator.severity));
+  const indicators = importantIndicators.length
+    ? importantIndicators.map((indicator) => `- ${indicator.message}`).join("\n")
     : "- No major indicators found";
-  const breakdown = (report.score_breakdown || []).length
-    ? report.score_breakdown.map((item) => `- ${item.label}: ${item.score}/${item.cap}`).join("\n")
-    : "- No score components added";
-  const aiEvidence = (report.ai_evidence || []).length
-    ? report.ai_evidence.map((phrase) => `- ${phrase}`).join("\n")
-    : "- No specific suspicious language found";
-  const hashes = (report.attachment_hashes || []).length
-    ? report.attachment_hashes.map((value) => `- ${value}`).join("\n")
-    : "- No attachment content hash available";
-  const qrLinks = (report.decoded_qr_links || []).length
-    ? report.decoded_qr_links.map((link) => `- ${link.href}`).join("\n")
-    : "- No QR link found";
 
   return [
     "UniPhishGuard report",
     `Verdict: ${report.verdict}`,
     `Threat level: ${threatLevel.label}`,
     `Risk score: ${report.risk_score}/100`,
-    `AI phishing probability: ${Math.round((report.ai_confidence || 0) * 100)}%`,
-    `URL reputation: ${report.url_reputation_status || "not_configured"} (${report.url_reputation_checked || 0} checked)`,
-    "Score breakdown:", breakdown,
-    "AI language evidence:", aiEvidence,
-    "Attachment hashes:", hashes,
-    "Decoded QR links:", qrLinks,
     "Threat categories:", categories,
     "Indicators:", indicators,
   ].join("\n");
@@ -682,16 +575,6 @@ function escapeHtml(value) {
     .replace(/>/g, "&gt;")
     .replace(/"/g, "&quot;")
     .replace(/'/g, "&#039;");
-}
-
-function formatPrediction(value) {
-  if (value === "phishing") {
-    return "Phishing signs found";
-  }
-  if (value === "legitimate") {
-    return "No phishing signs found";
-  }
-  return escapeHtml(value);
 }
 
 function verdictClassName(verdict) {

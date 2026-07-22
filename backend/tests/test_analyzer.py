@@ -421,3 +421,29 @@ def test_very_long_email_body_still_scans(monkeypatch) -> None:
     )
 
     assert result.verdict == "Likely legitimate"
+
+
+def test_outlook_safe_links_wrapper_does_not_create_false_positive(monkeypatch) -> None:
+    monkeypatch.setattr(analyzer, "predict_email_risk", lambda email: ("phishing", 0.82))
+    safe_link = (
+        "https://eur05.safelinks.protection.outlook.com/"
+        "?url=https%3A%2F%2Fwww.samsung.com%2Fae%2Foffers&data=example"
+    )
+
+    result = analyze_email(
+        EmailAnalysisRequest(
+            subject="Today's the day - don't miss your pre-order offers",
+            sender=EmailAddress(name="Samsung Gulf Electronics", email="samsung-mena@gulf.email.samsung.com"),
+            body=(
+                "External Email: This email originated from outside the organization. "
+                "Join us live and pre-order your next Galaxy device."
+            ),
+            headers="Authentication-Results: spf=pass dkim=pass dmarc=pass",
+            links=[LinkInfo(text="samsung.com", href=safe_link)],
+        )
+    )
+
+    assert result.risk_score < 25
+    assert result.verdict == "Likely legitimate"
+    assert not any(indicator.code == "link_text_destination_mismatch" for indicator in result.indicators)
+    assert len({(indicator.code, indicator.message) for indicator in result.indicators}) == len(result.indicators)

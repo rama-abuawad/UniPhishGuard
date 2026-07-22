@@ -15,7 +15,7 @@ from html.parser import HTMLParser
 from html import unescape
 from ipaddress import ip_address
 from urllib.error import HTTPError, URLError
-from urllib.parse import unquote, urlencode, urlparse
+from urllib.parse import parse_qs, unquote, urlencode, urlparse
 from urllib.request import Request, urlopen
 
 import cv2
@@ -227,6 +227,7 @@ def analyze_email(email: EmailAnalysisRequest) -> EmailAnalysisResponse:
     indicators.extend(reputation_indicators)
     indicators.extend(attachment_indicators)
     indicators.extend(_check_university_impersonation(email))
+    indicators = _deduplicate_indicators(indicators)
 
     ai_prediction, ai_confidence = predict_email_risk(email)
     ai_evidence = explain_email_risk(email)
@@ -478,6 +479,17 @@ def _check_urls(email: EmailAnalysisRequest, links: list[LinkInfo]) -> list[Indi
         )
 
     return indicators
+
+
+def _deduplicate_indicators(indicators: list[Indicator]) -> list[Indicator]:
+    unique: list[Indicator] = []
+    seen: set[tuple[str, str]] = set()
+    for indicator in indicators:
+        key = (indicator.code, indicator.message)
+        if key not in seen:
+            seen.add(key)
+            unique.append(indicator)
+    return unique
 
 
 def _authentication_result_blocks(headers: str) -> list[str]:
@@ -848,7 +860,11 @@ def _score(
     caps = SCORING_CONFIG["category_caps"]
     raw_components = {category: 0 for category in caps}
 
-    if ai_prediction == "phishing" and ai_confidence >= 0.75:
+    corroborated = any(
+        indicator.code != "ai_phishing_signal" and indicator.severity in {"medium", "high"}
+        for indicator in indicators
+    )
+    if ai_prediction == "phishing" and ai_confidence >= 0.75 and corroborated:
         raw_components["ai_language"] += round(SCORING_CONFIG["ai_phishing_weight"] * ai_confidence)
 
     for indicator in indicators:
@@ -1026,7 +1042,14 @@ def _collect_links(email: EmailAnalysisRequest) -> list[LinkInfo]:
 
 
 def _clean_url(url: str) -> str:
-    return (url or "").strip().rstrip(".,);]")
+    cleaned = (url or "").strip().rstrip(".,);]")
+    parsed = urlparse(cleaned)
+    host = _normalize_host(parsed.hostname or "")
+    if host == "safelinks.protection.outlook.com" or host.endswith(".safelinks.protection.outlook.com"):
+        wrapped = parse_qs(parsed.query).get("url", [])
+        if wrapped:
+            return unquote(wrapped[0]).strip()
+    return cleaned
 
 
 def _normalize_host(host: str) -> str:
