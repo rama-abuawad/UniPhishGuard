@@ -14,7 +14,7 @@ def test_flags_high_risk_email() -> None:
             sender=EmailAddress(name="IT", email="it@university.edu"),
             reply_to="helpdesk@example.net",
             body="Click http://192.168.1.10/login to verify your account.",
-            headers="Authentication-Results: spf=pass dkim=pass dmarc=fail",
+            headers="Authentication-Results: mx.example; spf=pass dkim=pass dmarc=fail",
             attachments=[],
         )
     )
@@ -32,7 +32,7 @@ def test_legitimate_email_stays_low_risk() -> None:
             sender=EmailAddress(name="Registrar", email="registrar@university.edu"),
             reply_to="registrar@university.edu",
             body="Your class schedule has been updated in the student portal.",
-            headers="Authentication-Results: spf=pass dkim=pass dmarc=pass",
+            headers="Authentication-Results: mx.example; spf=pass dkim=pass dmarc=pass",
             attachments=[],
         )
     )
@@ -53,7 +53,7 @@ def test_adu_tuition_email_is_not_marked_phishing() -> None:
                 "https://click.info.adu.ac.ae/open.aspx and make payment using "
                 "the secure Online Payment Gateway. Include your student ID."
             ),
-            headers="Authentication-Results: spf=pass dkim=pass dmarc=pass",
+            headers="Authentication-Results: mx.example; spf=pass dkim=pass dmarc=pass",
             attachments=[],
         )
     )
@@ -73,7 +73,7 @@ def test_keywords_alone_do_not_make_email_suspicious() -> None:
                 "The HR team will explain internship applications, scholarship options, "
                 "and Microsoft 365 tools during tomorrow's student workshop."
             ),
-            headers="Authentication-Results: spf=pass dkim=pass dmarc=pass",
+            headers="Authentication-Results: mx.example; spf=pass dkim=pass dmarc=pass",
             attachments=[],
         )
     )
@@ -96,7 +96,7 @@ def test_external_internship_schedule_email_stays_legitimate() -> None:
                 "the google map locations to your companies. The form url remains: "
                 "https://studentsaduac-my.sharepoint.com/Summer-2506-Internship-Visit-Schedule.xlsx"
             ),
-            headers="Authentication-Results: spf=pass dkim=pass dmarc=pass",
+            headers="Authentication-Results: mx.example; spf=pass dkim=pass dmarc=pass",
             attachments=[
                 AttachmentInfo(
                     name="Summer 2506 Internship Visit Schedule.xlsx",
@@ -120,7 +120,7 @@ def test_dkim_warning_is_clear_to_user() -> None:
             sender=EmailAddress(name="Instructor", email="instructor@university.edu"),
             reply_to="instructor@university.edu",
             body="Please review the project update before class.",
-            headers="Authentication-Results: spf=pass dkim=fail dmarc=pass",
+            headers="Authentication-Results: mx.example; spf=pass dkim=fail dmarc=pass",
             attachments=[],
         )
     )
@@ -140,7 +140,7 @@ def test_detects_university_domain_impersonation_and_categories() -> None:
                 "Your Microsoft 365 account will be locked. "
                 "Sign in at https://aduniversity-login.com/office to verify your password."
             ),
-            headers="Authentication-Results: spf=pass dkim=pass dmarc=pass",
+            headers="Authentication-Results: mx.example; spf=pass dkim=pass dmarc=pass",
             attachments=[],
         )
     )
@@ -162,7 +162,7 @@ def test_saves_scan_history(monkeypatch) -> None:
         sender=EmailAddress(name="IT", email="it@university.edu"),
         reply_to="helpdesk@example.net",
         body="Click http://192.168.1.10/login to verify your account.",
-        headers="Authentication-Results: spf=pass dkim=pass dmarc=fail",
+        headers="Authentication-Results: mx.example; spf=pass dkim=pass dmarc=fail",
         attachments=[],
     )
     result = analyze_email(email)
@@ -184,7 +184,7 @@ def test_ai_phishing_signal_cannot_score_zero(monkeypatch) -> None:
             subject="Account expiry notice",
             sender=EmailAddress(name="Support", email="support@outlook.com"),
             body="Your account expires today. Please sign in to keep access.",
-            headers="Authentication-Results: spf=pass dkim=pass dmarc=pass",
+            headers="Authentication-Results: mx.example; spf=pass dkim=pass dmarc=pass",
         )
     )
 
@@ -202,7 +202,7 @@ def test_visible_adu_link_pointing_elsewhere_is_high_risk(monkeypatch) -> None:
             sender=EmailAddress(name="External", email="notice@example.com"),
             body="Please open ADU Portal.",
             body_html='<a href="https://evil-login.example.com">https://students.adu.ac.ae</a>',
-            headers="Authentication-Results: spf=pass dkim=pass dmarc=pass",
+            headers="Authentication-Results: mx.example; spf=pass dkim=pass dmarc=pass",
             links=[LinkInfo(text="https://students.adu.ac.ae", href="https://evil-login.example.com")],
         )
     )
@@ -221,7 +221,7 @@ def test_free_outlook_sender_is_not_trusted_sender(monkeypatch) -> None:
             subject="ADU password check",
             sender=EmailAddress(name="ADU IT", email="adu.helpdesk@outlook.com"),
             body="ADU IT needs you to verify your password today.",
-            headers="Authentication-Results: spf=pass dkim=pass dmarc=pass",
+            headers="Authentication-Results: mx.example; spf=pass dkim=pass dmarc=pass",
         )
     )
 
@@ -236,7 +236,7 @@ def test_double_extension_is_reported_before_generic_extension(monkeypatch) -> N
             subject="Invoice",
             sender=EmailAddress(name="Vendor", email="vendor@example.com"),
             body="See attached invoice.",
-            headers="Authentication-Results: spf=pass dkim=pass dmarc=pass",
+            headers="Authentication-Results: mx.example; spf=pass dkim=pass dmarc=pass",
             attachments=[AttachmentInfo(name="invoice.pdf.exe", content_type="application/octet-stream")],
         )
     )
@@ -310,6 +310,18 @@ def test_forwarded_mixed_authentication_is_inconclusive_not_auto_phishing(monkey
     assert any(indicator.code == "spf_inconclusive" for indicator in result.indicators)
 
 
+def test_forged_authentication_results_are_not_trusted(monkeypatch) -> None:
+    monkeypatch.setattr(analyzer, "predict_email_risk", lambda email: ("legitimate", 0.70))
+    result = analyze_email(EmailAnalysisRequest(
+        subject="Forged header",
+        sender=EmailAddress(email="attacker@example.net"),
+        body="Review this message.",
+        headers="Authentication-Results: attacker.example; spf=pass dkim=pass dmarc=pass",
+    ))
+    assert any(indicator.code == "auth_results_untrusted" for indicator in result.indicators)
+    assert not any(indicator.code in {"spf_failed", "dkim_failed", "dmarc_failed"} for indicator in result.indicators)
+
+
 def test_punycode_lookalike_link_is_high_risk(monkeypatch) -> None:
     monkeypatch.setattr(analyzer, "predict_email_risk", lambda email: ("legitimate", 0.70))
 
@@ -318,7 +330,7 @@ def test_punycode_lookalike_link_is_high_risk(monkeypatch) -> None:
             subject="ADU portal",
             sender=EmailAddress(name="Notice", email="notice@example.com"),
             body="Open https://xn--adu-login-9db.com now.",
-            headers="Authentication-Results: spf=pass dkim=pass dmarc=pass",
+            headers="Authentication-Results: mx.example; spf=pass dkim=pass dmarc=pass",
         )
     )
 
@@ -334,7 +346,7 @@ def test_url_shortener_to_login_page_is_suspicious(monkeypatch) -> None:
             subject="Password reset",
             sender=EmailAddress(name="Helpdesk", email="helpdesk@example.com"),
             body="Reset your password here https://bit.ly/adu-login today.",
-            headers="Authentication-Results: spf=pass dkim=pass dmarc=pass",
+            headers="Authentication-Results: mx.example; spf=pass dkim=pass dmarc=pass",
         )
     )
 
@@ -350,7 +362,7 @@ def test_attachment_mime_mismatch_is_flagged(monkeypatch) -> None:
             subject="Document",
             sender=EmailAddress(name="Sender", email="sender@example.com"),
             body="See attached PDF.",
-            headers="Authentication-Results: spf=pass dkim=pass dmarc=pass",
+            headers="Authentication-Results: mx.example; spf=pass dkim=pass dmarc=pass",
             attachments=[AttachmentInfo(name="document.pdf", content_type="application/x-msdownload")],
         )
     )
@@ -365,7 +377,7 @@ def test_history_is_separated_by_user(monkeypatch) -> None:
         subject="User scoped scan",
         sender=EmailAddress(name="IT", email="it@example.com"),
         body="Check this.",
-        headers="Authentication-Results: spf=pass dkim=pass dmarc=pass",
+        headers="Authentication-Results: mx.example; spf=pass dkim=pass dmarc=pass",
     )
     result = analyze_email(email)
 
@@ -405,7 +417,7 @@ def test_long_sharepoint_url_does_not_crash(monkeypatch) -> None:
             sender=EmailAddress(name="Prosper Yeng", email="prosper@example.com"),
             body=f"The form url remains: {long_url}",
             body_html=f'<a href="{long_url}">Summer 2506 Internship Visit Schedule.xlsx</a>',
-            headers="Authentication-Results: spf=pass dkim=pass dmarc=pass",
+            headers="Authentication-Results: mx.example; spf=pass dkim=pass dmarc=pass",
         )
     )
 
@@ -421,7 +433,7 @@ def test_very_long_email_body_still_scans(monkeypatch) -> None:
             subject="Long newsletter",
             sender=EmailAddress(name="Conference", email="conference@example.com"),
             body="Conference update. " * 9000,
-            headers="Authentication-Results: spf=pass dkim=pass dmarc=pass",
+            headers="Authentication-Results: mx.example; spf=pass dkim=pass dmarc=pass",
         )
     )
 
@@ -443,7 +455,7 @@ def test_outlook_safe_links_wrapper_does_not_create_false_positive(monkeypatch) 
                 "External Email: This email originated from outside the organization. "
                 "Join us live and pre-order your next Galaxy device."
             ),
-            headers="Authentication-Results: spf=pass dkim=pass dmarc=pass",
+            headers="Authentication-Results: mx.example; spf=pass dkim=pass dmarc=pass",
             links=[LinkInfo(text="samsung.com", href=safe_link)],
         )
     )

@@ -7,6 +7,7 @@ import os
 import joblib
 import sklearn
 from .schemas import EmailAnalysisRequest
+from .html_text import visible_html_text
 
 
 MODEL_PATH = Path(__file__).with_name("email_model.joblib")
@@ -69,8 +70,13 @@ def explain_email_risk(email: EmailAnalysisRequest) -> list[str]:
 
 
 def _model_text(email: EmailAnalysisRequest) -> str:
-    links = " ".join(f"{link.text} {link.href}" for link in email.links)
-    text = f"{email.subject} {email.body} {email.body_html or ''} {links}".lower()
+    plain = " ".join(email.body.split())
+    visible_html = visible_html_text(email.body_html or "")
+    body_parts = [plain]
+    if visible_html and visible_html.lower() not in plain.lower() and plain.lower() not in visible_html.lower():
+        body_parts.append(visible_html)
+    links = " ".join(f"{link.text} {(link.href.split('/')[2] if '://' in link.href else link.href)}" for link in email.links)
+    text = f"{email.subject} {' '.join(body_parts)} {links}".lower()
     # Outlook/Exchange may inject generic external-sender warnings. They describe
     # the organization boundary, not the sender's intent, so exclude them from ML.
     for phrase in (

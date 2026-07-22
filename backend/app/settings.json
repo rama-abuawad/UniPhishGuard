@@ -31,7 +31,13 @@
                          "brand_terms":  [
                                              "adu",
                                              "abu dhabi university"
-                                         ]
+                                         ],
+                         "trusted_authserv_ids": [
+                                                    "mx.example",
+                                                    "spf.protection.outlook.com",
+                                                    "outlook.com",
+                                                    "office365.com"
+                                                ]
                      },
     "scoring":  {
                     "ai_phishing_weight":  24,
@@ -55,6 +61,7 @@
                                               "auth_alignment_warning":  18,
                                               "auth_headers_not_checked":  6,
                                               "auth_results_missing":  6,
+                                              "auth_results_untrusted":  4,
                                               "forwarding_or_arc_context":  4,
                                               "link_text_destination_mismatch":  35,
                                               "approved_domain_displayed_for_untrusted_link":  20,
@@ -92,6 +99,7 @@
                                                  "auth_alignment_warning":  "authentication",
                                                  "auth_headers_not_checked":  "authentication",
                                                  "auth_results_missing":  "authentication",
+                                                 "auth_results_untrusted":  "authentication",
                                                  "forwarding_or_arc_context":  "authentication",
                                                  "link_text_destination_mismatch":  "urls",
                                                  "approved_domain_displayed_for_untrusted_link":  "urls",
@@ -117,6 +125,11 @@
                                                  "untrusted_university_branding":  "university_impersonation",
                                                  "fake_university_service":  "university_impersonation",
                                                  "ai_phishing_signal":  "ai_language"
-                                             }
+                                             },
+                    "verdict_thresholds": {
+                                              "suspicious": 25,
+                                              "phishing": 55,
+                                              "high_risk": 80
+                                          }
                 }
 }

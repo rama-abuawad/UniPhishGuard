@@ -537,7 +537,7 @@ function sampleEmail() {
     reply_to: "support@adu-help.com",
     body: "Click http://192.168.1.10/login or https://aduniversity-login.com/office to verify your Microsoft 365 password.",
     body_html: '<p>Click <a href="https://aduniversity-login.com/office">ADU Portal</a> to verify your Microsoft 365 password.</p>',
-    headers: "Authentication-Results: spf=pass dkim=pass dmarc=fail",
+    headers: "Authentication-Results: mx.example; spf=pass dkim=pass dmarc=fail",
     headers_status: "checked",
     links: [{ text: "ADU Portal", href: "https://aduniversity-login.com/office" }],
     attachments: [{ name: "invoice.pdf.exe", content_type: "application/octet-stream", size: 42100 }],

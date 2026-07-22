@@ -5,9 +5,7 @@ import base64
 import binascii
 import hashlib
 import io
-import json
 import zipfile
-from functools import lru_cache
 from pathlib import Path
 from email.utils import parseaddr
 from html.parser import HTMLParser
@@ -19,21 +17,20 @@ import cv2
 import numpy as np
 
 from .ai import explain_email_risk, predict_email_risk
+from .config import load_settings
 from .schemas import EmailAnalysisRequest, EmailAnalysisResponse, Indicator, LinkInfo, ScoreComponent, ThreatCategory, ThreatLevel
 
 
 SETTINGS_PATH = Path(__file__).with_name("settings.json")
-@lru_cache
-def _settings() -> dict:
-    return json.loads(SETTINGS_PATH.read_text(encoding="utf-8-sig"))
+SETTINGS = load_settings(SETTINGS_PATH)
 
 
 def organization_config() -> dict:
-    return _settings()["organization"]
+    return SETTINGS.organization.model_dump()
 
 
 def scoring_config() -> dict:
-    return _settings()["scoring"]
+    return SETTINGS.scoring.model_dump()
 
 
 URL_RE = re.compile(r"https?://[^\s<>\"]+", re.IGNORECASE)
@@ -43,6 +40,7 @@ SCORING_CONFIG = scoring_config()
 APPROVED_SENDER_DOMAINS = set(ORG_CONFIG["sender_domains"])
 APPROVED_LINK_DOMAINS = set(ORG_CONFIG["link_domains"])
 COMMON_HOSTING_DOMAINS = set(ORG_CONFIG["common_hosting_domains"])
+TRUSTED_AUTHSERV_IDS = set(ORG_CONFIG["trusted_authserv_ids"])
 
 URL_SHORTENERS = {
     "bit.ly",
@@ -247,6 +245,14 @@ def _check_authentication_results(headers: str, status: str = "checked") -> list
         ]
 
     auth_blocks = _authentication_result_blocks(headers)
+    trusted_blocks = [block for block in auth_blocks if _trusted_authentication_block(block)]
+    if auth_blocks and not trusted_blocks:
+        return [Indicator(
+            code="auth_results_untrusted",
+            severity="low",
+            message="Authentication results were present but were not issued by a configured trusted mail server.",
+        )]
+    auth_blocks = trusted_blocks
     parsed_results = _parse_authentication_results(auth_blocks)
 
     for protocol in ("spf", "dkim", "dmarc"):
@@ -477,6 +483,14 @@ def _parse_authentication_results(blocks: list[str]) -> dict[str, list[dict[str,
                 )
 
     return results
+
+
+def _trusted_authentication_block(block: str) -> bool:
+    match = re.search(r"(?:arc-)?authentication-results:\s*(?:i=\d+;\s*)?([^;\s]+)", block, re.IGNORECASE)
+    if not match:
+        return False
+    authserv_id = match.group(1).strip().lower().rstrip(".")
+    return any(authserv_id == trusted or authserv_id.endswith(f".{trusted}") for trusted in TRUSTED_AUTHSERV_IDS)
 
 
 def _has_auth_alignment_problem(blocks: list[str]) -> bool:
