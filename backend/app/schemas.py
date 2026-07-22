@@ -1,3 +1,5 @@
+"""Pydantic schemas for the UniPhishGuard API and persistence layer."""
+
 from pydantic import BaseModel, Field
 
 

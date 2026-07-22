@@ -6,7 +6,7 @@ from pathlib import Path
 from sklearn.metrics import average_precision_score, classification_report, confusion_matrix, roc_auc_score
 
 from app.ai import predict_email_risk
-from app.models import EmailAnalysisRequest, EmailAddress
+from app.schemas import EmailAnalysisRequest, EmailAddress
 
 
 ROOT = Path(__file__).resolve().parent

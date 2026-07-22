@@ -6,7 +6,7 @@ from urllib.error import HTTPError, URLError
 from urllib.parse import urlencode, urlparse
 from urllib.request import Request, urlopen
 
-from .models import Indicator
+from .schemas import Indicator
 
 
 WEB_RISK_ENDPOINT = "https://webrisk.googleapis.com/v1/uris:search"

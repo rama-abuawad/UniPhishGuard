@@ -17,7 +17,7 @@ import numpy as np
 
 from .ai import explain_email_risk, predict_email_risk
 from .config import organization_config, scoring_config
-from .models import EmailAnalysisRequest, EmailAnalysisResponse, Indicator, LinkInfo, ScoreComponent, ThreatCategory, ThreatLevel
+from .schemas import EmailAnalysisRequest, EmailAnalysisResponse, Indicator, LinkInfo, ScoreComponent, ThreatCategory, ThreatLevel
 from .url_reputation import check_url_reputation
 
 

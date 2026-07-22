@@ -8,7 +8,7 @@ import hmac
 import hashlib
 import os
 
-from .models import EmailAnalysisRequest, EmailAnalysisResponse, HistoryItem
+from .schemas import EmailAnalysisRequest, EmailAnalysisResponse, HistoryItem
 
 
 DB_PATH = Path(__file__).resolve().parents[1] / "data" / "uniphishguard.db"

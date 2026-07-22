@@ -4,7 +4,7 @@ import os
 
 import joblib
 import sklearn
-from .models import EmailAnalysisRequest
+from .schemas import EmailAnalysisRequest
 
 
 MODEL_PATH = Path(__file__).with_name("email_model.joblib")

@@ -15,7 +15,7 @@ from fastapi.staticfiles import StaticFiles
 from .ai import MODEL_PATH, _load_model
 from .analyzer import analyze_email
 from .db import clear_history, get_history, init_db, save_scan
-from .models import EmailAnalysisRequest, EmailAnalysisResponse, HistoryItem
+from .schemas import EmailAnalysisRequest, EmailAnalysisResponse, HistoryItem
 
 
 API_TOKEN = os.getenv("UNIPHISHGUARD_API_TOKEN", "").strip()
