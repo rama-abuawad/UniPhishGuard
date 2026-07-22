@@ -145,6 +145,10 @@ npm run validate
 
 The retained automated suite is backend-focused. Playwright and frontend automated tests were intentionally removed to keep the project small; the Outlook task pane should be smoke-tested through sideloading after UI changes.
 
+Pure task-pane utilities use Node's built-in test runner (`npm test`); Playwright is not used. Manual smoke test: start the HTTPS backend, sideload the validated manifest, open both legitimate and suspicious messages, scan each, inspect technical details and history, open the IT-report draft, verify that no message is sent automatically, and confirm error handling after stopping the backend.
+
+UniPhishGuard estimates phishing risk and supports user and IT review. It does not detect all phishing, and a low-risk result does not guarantee that an email is safe.
+
 ## Deployment
 
 `render.yaml` describes the FastAPI service and `netlify.toml` can publish the static add-in. Replace all placeholder origins, configure environment variables, update the single `manifest.xml` with production HTTPS URLs and Entra application details when required, validate it, and then deploy or distribute it through the Microsoft 365 admin workflow.

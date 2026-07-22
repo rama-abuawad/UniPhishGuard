@@ -13,6 +13,7 @@ const useSampleEmail = params.get("sample") === "1";
 const fallbackApis = window.location.port === "8000" ? [] : ["https://127.0.0.1:8000"];
 const API_BASE_URLS = [devApi || configuredApi, ...fallbackApis].filter(Boolean);
 const API_TOKEN = window.UNIPHISHGUARD_API_TOKEN || "";
+const { buildReportText, categoryEvidence, escapeHtml, normalizeThreatLevel, verdictClassName } = window.UniPhishGuardUtils;
 
 // -----------------------------------------------------------------------------
 // UI initialization
@@ -597,74 +598,6 @@ function classifyError(error) {
     return { title: "Backend offline.", message: `Start the backend and check https://localhost:8000/health. ${error.message || ""}`.trim(), code: "BACKEND_OFFLINE" };
   }
   return { title: "Scan failed.", message: error.message || "Check that the FastAPI backend is running over HTTPS.", code: "SCAN_ERROR" };
-}
-
-function categoryEvidence(category) {
-  return category.evidence_strength || category.confidence || "medium";
-}
-
-function buildReportText(report) {
-  const threatLevel = report.threat_level || { label: "Unknown" };
-  const categories = report.risk_score >= 25 && (report.threat_categories || []).length
-    ? report.threat_categories.map((category) => `- ${category.label} (${categoryEvidence(category)} evidence)`).join("\n")
-    : "- No specific category detected";
-  const importantIndicators = (report.indicators || []).filter((indicator) =>
-    indicator.code !== "ai_phishing_signal" && ["high", "medium"].includes(indicator.severity)
-  );
-  const indicators = importantIndicators.length
-    ? importantIndicators.map((indicator) => `- ${indicator.message}`).join("\n")
-    : "- No major indicators found";
-
-  return [
-    "UniPhishGuard report",
-    `Verdict: ${report.verdict}`,
-    `Threat level: ${threatLevel.label}`,
-    `Risk score: ${report.risk_score}/100`,
-    "Threat categories:", categories,
-    "Indicators:", indicators,
-  ].join("\n");
-}
-
-function escapeHtml(value) {
-  return String(value)
-    .replace(/&/g, "&amp;")
-    .replace(/</g, "&lt;")
-    .replace(/>/g, "&gt;")
-    .replace(/"/g, "&quot;")
-    .replace(/'/g, "&#039;");
-}
-
-function verdictClassName(verdict) {
-  const normalized = String(verdict).toLowerCase();
-  if (normalized.includes("high-risk")) {
-    return "verdict-high";
-  }
-  if (normalized.includes("phishing")) {
-    return "verdict-phishing";
-  }
-  if (normalized.includes("suspicious")) {
-    return "verdict-suspicious";
-  }
-  return "verdict-legitimate";
-}
-
-function normalizeThreatLevel(report) {
-  // Fallback for older API responses.
-  if (report.threat_level) {
-    return report.threat_level;
-  }
-
-  const score = Number(report.risk_score) || 0;
-  if (score >= 80) {
-    return { code: "critical", label: "Critical", color: "#c93232" };
-  }
-  if (score >= 55) {
-    return { code: "high_risk", label: "High Risk", color: "#d45500" };
-  }
-  if (score >= 25) {
-    return { code: "suspicious", label: "Suspicious", color: "#c87816" };
-  }
-  return { code: "safe", label: "Safe", color: "#1f7a4d" };
 }
 
 function threatLevelClassName(code, verdict) {
