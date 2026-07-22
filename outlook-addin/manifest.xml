@@ -5,14 +5,14 @@
   xmlns:mailappor="http://schemas.microsoft.com/office/mailappversionoverrides/1.0"
   xsi:type="MailApp">
   <Id>8a6f8c78-27b9-4d4c-b2c7-2d8f9db65d41</Id>
-  <Version>1.0.4.0</Version>
+  <Version>1.0.5.0</Version>
   <ProviderName>UniPhishGuard</ProviderName>
   <DefaultLocale>en-US</DefaultLocale>
   <DisplayName DefaultValue="UniPhishGuard"/>
   <Description DefaultValue="Scan opened emails for phishing risk."/>
   <IconUrl DefaultValue="https://localhost:8000/addin/assets/icon-64.png"/>
   <HighResolutionIconUrl DefaultValue="https://localhost:8000/addin/assets/icon-128.png"/>
-  <SupportUrl DefaultValue="https://localhost:8000/addin/taskpane.html?v=1.0.4"/>
+  <SupportUrl DefaultValue="https://localhost:8000/addin/taskpane.html?v=1.0.5"/>
   <AppDomains>
     <AppDomain>https://localhost:3000</AppDomain>
     <AppDomain>https://localhost:8000</AppDomain>
@@ -28,7 +28,7 @@
   <FormSettings>
     <Form xsi:type="ItemRead">
       <DesktopSettings>
-        <SourceLocation DefaultValue="https://localhost:8000/addin/taskpane.html?v=1.0.4"/>
+        <SourceLocation DefaultValue="https://localhost:8000/addin/taskpane.html?v=1.0.5"/>
         <RequestedHeight>450</RequestedHeight>
       </DesktopSettings>
     </Form>
@@ -81,8 +81,8 @@
         <bt:Image id="Icon.80x80" DefaultValue="https://localhost:8000/addin/assets/icon-80.png"/>
       </bt:Images>
       <bt:Urls>
-        <bt:Url id="Commands.Url" DefaultValue="https://localhost:8000/addin/taskpane.html?v=1.0.4"/>
-        <bt:Url id="Taskpane.Url" DefaultValue="https://localhost:8000/addin/taskpane.html?v=1.0.4"/>
+        <bt:Url id="Commands.Url" DefaultValue="https://localhost:8000/addin/taskpane.html?v=1.0.5"/>
+        <bt:Url id="Taskpane.Url" DefaultValue="https://localhost:8000/addin/taskpane.html?v=1.0.5"/>
       </bt:Urls>
       <bt:ShortStrings>
         <bt:String id="GroupLabel" DefaultValue="UniPhishGuard"/>

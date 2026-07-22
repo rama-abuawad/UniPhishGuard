@@ -314,10 +314,6 @@ function renderReport(report) {
       : "";
   const importantIndicators = (report.indicators || []).filter((indicator) => ["high", "medium"].includes(indicator.severity));
   const checks = buildCheckStatuses(report);
-  const aiTextConcern = (report.indicators || []).some((indicator) => indicator.code === "ai_phishing_signal");
-  const aiTextResult = aiTextConcern
-    ? "Concerning phishing-like wording found."
-    : "No strong phishing-like wording found.";
   const reasons = buildResultReasons(report, checks);
   const reasonItems = renderSimpleList(reasons, "No strong phishing evidence was found.");
   const technicalDetails = renderTechnicalDetails(report, importantIndicators, reputationStatus || "not enabled");
@@ -355,8 +351,6 @@ function renderReport(report) {
           <span class="meter-fill risk-fill" style="width: ${clampPercent(report.risk_score)}%; background: ${threatColor}"></span>
         </div>
       </div>
-
-      <p class="ai-result"><strong>AI text detection:</strong> ${escapeHtml(aiTextResult)}</p>
 
       <p class="section-title">Why this result</p>
       <ul class="list">${reasonItems}</ul>
@@ -454,8 +448,9 @@ function buildCheckStatuses(report) {
 }
 
 function buildResultReasons(report, checks) {
-  if ((report.top_reasons || []).length) {
-    return [...new Set(report.top_reasons)].slice(0, 3);
+  const ruleReasons = (report.top_reasons || []).filter((reason) => !/^AI\b/i.test(reason));
+  if (ruleReasons.length) {
+    return [...new Set(ruleReasons)].slice(0, 3);
   }
 
   const reasons = [];
@@ -467,6 +462,7 @@ function buildResultReasons(report, checks) {
 }
 
 function renderTechnicalDetails(report, indicators, reputationStatus) {
+  indicators = indicators.filter((indicator) => indicator.code !== "ai_phishing_signal");
   const categories = report.risk_score >= 25 ? renderThreatCategories(report.threat_categories || []) : "";
   const indicatorItems = indicators.length
     ? `<p class="detail-label">Important indicators</p><ul class="list">${renderSimpleList(indicators.map((indicator) => indicator.message), "")}</ul>`
@@ -611,7 +607,9 @@ function buildReportText(report) {
   const categories = report.risk_score >= 25 && (report.threat_categories || []).length
     ? report.threat_categories.map((category) => `- ${category.label} (${categoryEvidence(category)} evidence)`).join("\n")
     : "- No specific category detected";
-  const importantIndicators = (report.indicators || []).filter((indicator) => ["high", "medium"].includes(indicator.severity));
+  const importantIndicators = (report.indicators || []).filter((indicator) =>
+    indicator.code !== "ai_phishing_signal" && ["high", "medium"].includes(indicator.severity)
+  );
   const indicators = importantIndicators.length
     ? importantIndicators.map((indicator) => `- ${indicator.message}`).join("\n")
     : "- No major indicators found";

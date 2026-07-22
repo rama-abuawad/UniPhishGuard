@@ -299,17 +299,6 @@ h1 {
   margin: 6px 0 0;
 }
 
-.ai-result {
-  background: #f4f7fb;
-  border-left: 4px solid #4477b2;
-  border-radius: 6px;
-  color: #344257;
-  font-size: 13px;
-  line-height: 1.4;
-  margin: 12px 0;
-  padding: 9px 10px;
-}
-
 .technical-details {
   border-top: 1px solid #d9e1ec;
   margin-top: 16px;
