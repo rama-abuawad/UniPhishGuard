@@ -1,35 +1,51 @@
 """Pydantic schemas for the UniPhishGuard API and persistence layer."""
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
+
+MAX_SUBJECT_LENGTH = 998
+MAX_BODY_LENGTH = 200_000
+MAX_HTML_LENGTH = 500_000
+MAX_HEADERS_LENGTH = 100_000
+MAX_LINKS = 100
+MAX_ATTACHMENTS = 50
+MAX_URL_LENGTH = 4_096
+MAX_ATTACHMENT_CONTENT = 7_000_000
 
 
 class EmailAddress(BaseModel):
-    name: str | None = None
-    email: str
+    name: str | None = Field(default=None, max_length=320)
+    email: str = Field(min_length=3, max_length=320, pattern=r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
 
 
 class AttachmentInfo(BaseModel):
-    name: str
-    content_type: str | None = None
+    name: str = Field(min_length=1, max_length=255)
+    content_type: str | None = Field(default=None, max_length=255)
     size: int | None = Field(default=None, ge=0)
-    content_base64: str | None = None
+    content_base64: str | None = Field(default=None, max_length=MAX_ATTACHMENT_CONTENT)
 
 
 class LinkInfo(BaseModel):
-    text: str = ""
-    href: str
+    text: str = Field(default="", max_length=2_048)
+    href: str = Field(min_length=1, max_length=MAX_URL_LENGTH)
+
+    @field_validator("href")
+    @classmethod
+    def validate_url_scheme(cls, value: str) -> str:
+        if not value.lower().startswith(("http://", "https://")):
+            raise ValueError("Link URL must use http or https.")
+        return value
 
 
 class EmailAnalysisRequest(BaseModel):
-    subject: str = ""
+    subject: str = Field(default="", max_length=MAX_SUBJECT_LENGTH)
     sender: EmailAddress
-    reply_to: str | None = None
-    body: str = ""
-    body_html: str | None = None
-    headers: str = ""
+    reply_to: str | None = Field(default=None, max_length=320)
+    body: str = Field(default="", max_length=MAX_BODY_LENGTH)
+    body_html: str | None = Field(default=None, max_length=MAX_HTML_LENGTH)
+    headers: str = Field(default="", max_length=MAX_HEADERS_LENGTH)
     headers_status: str = Field(default="checked", pattern="^(checked|not_available|failed)$")
-    links: list[LinkInfo] = Field(default_factory=list)
-    attachments: list[AttachmentInfo] = Field(default_factory=list)
+    links: list[LinkInfo] = Field(default_factory=list, max_length=MAX_LINKS)
+    attachments: list[AttachmentInfo] = Field(default_factory=list, max_length=MAX_ATTACHMENTS)
 
 
 class Indicator(BaseModel):

@@ -16,20 +16,26 @@ from .ai import MODEL_PATH, _load_model
 from .analyzer import analyze_email
 from .db import clear_history, get_history, init_db, save_scan
 from .schemas import EmailAnalysisRequest, EmailAnalysisResponse, HistoryItem
+from .rate_limit import LocalRateLimiter
 
 
+APP_ENV = os.getenv("APP_ENV", "development").strip().lower()
+if APP_ENV not in {"development", "testing", "production"}:
+    raise RuntimeError("APP_ENV must be development, testing, or production.")
 API_TOKEN = os.getenv("UNIPHISHGUARD_API_TOKEN", "").strip()
 ENTRA_TENANT_ID = os.getenv("ENTRA_TENANT_ID", "").strip()
 ENTRA_CLIENT_ID = os.getenv("ENTRA_CLIENT_ID", "").strip()
 REQUIRE_AUTH = (
+    APP_ENV == "production"
+    or
     os.getenv("REQUIRE_AUTH", "false").lower() == "true"
     or bool(API_TOKEN)
     or bool(ENTRA_TENANT_ID and ENTRA_CLIENT_ID)
 )
-MAX_REQUEST_BYTES = int(os.getenv("MAX_REQUEST_BYTES", "25000000"))
+MAX_REQUEST_BYTES = int(os.getenv("MAX_REQUEST_BYTES", "1000000"))
 RATE_LIMIT_WINDOW_SECONDS = 60
 RATE_LIMIT_MAX_REQUESTS = int(os.getenv("RATE_LIMIT_MAX_REQUESTS", "30"))
-_REQUESTS: dict[str, list[float]] = {}
+RATE_LIMITER = LocalRateLimiter(RATE_LIMIT_MAX_REQUESTS, RATE_LIMIT_WINDOW_SECONDS)
 _JWK_CLIENT: PyJWKClient | None = None
 OUTLOOK_ADDIN_DIR = Path(__file__).resolve().parents[2] / "outlook-addin"
 ERROR_LOG_PATH = Path(__file__).resolve().parents[1] / "data" / "errors.log"
@@ -37,6 +43,12 @@ ERROR_LOG_PATH = Path(__file__).resolve().parents[1] / "data" / "errors.log"
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    if APP_ENV == "production":
+        if not (ENTRA_TENANT_ID and ENTRA_CLIENT_ID):
+            raise RuntimeError("Production requires ENTRA_TENANT_ID and ENTRA_CLIENT_ID.")
+        history_secret = os.getenv("HISTORY_HMAC_SECRET", "")
+        if len(history_secret) < 32 or history_secret == "local-dev-history-secret":
+            raise RuntimeError("Production requires a strong HISTORY_HMAC_SECRET of at least 32 characters.")
     init_db()
     yield
 
@@ -80,14 +92,23 @@ async def limit_request_size(request: Request, call_next):
                 return _error_response(413, "REQUEST_TOO_LARGE", "Request is too large.", request_id)
         except ValueError:
             return _error_response(400, "INVALID_CONTENT_LENGTH", "Invalid Content-Length header.", request_id)
+    body = await request.body()
+    if len(body) > MAX_REQUEST_BYTES:
+        return _error_response(413, "REQUEST_TOO_LARGE", "Request is too large.", request_id)
     response = await call_next(request)
     response.headers["X-Request-ID"] = request_id
     response.headers["X-Content-Type-Options"] = "nosniff"
     response.headers["Referrer-Policy"] = "no-referrer"
-    response.headers["Strict-Transport-Security"] = "max-age=31536000; includeSubDomains"
+    if APP_ENV == "production" and request.url.scheme == "https":
+        response.headers["Strict-Transport-Security"] = "max-age=31536000; includeSubDomains"
     if request.url.path.startswith("/addin/"):
         response.headers["Cache-Control"] = "no-store, no-cache, must-revalidate, max-age=0"
         response.headers["Pragma"] = "no-cache"
+        response.headers["Content-Security-Policy"] = (
+            "default-src 'self'; script-src 'self' https://appsforoffice.microsoft.com; "
+            "style-src 'self' 'unsafe-inline'; img-src 'self' data:; "
+            "connect-src 'self' https://localhost:8000; frame-ancestors https://outlook.office.com https://outlook.office365.com"
+        )
     else:
         response.headers["Content-Security-Policy"] = "default-src 'none'; frame-ancestors 'none'"
     return response
@@ -98,28 +119,27 @@ def current_user(
     authorization: str | None = Header(default=None),
     x_uniphishguard_user: str | None = Header(default=None),
 ) -> str:
-    client_key = request.client.host if request.client else "local"
-    _check_rate_limit(client_key)
-
     if not REQUIRE_AUTH:
-        return (x_uniphishguard_user or "local")[:160]
+        user = (x_uniphishguard_user or "local")[:160]
+        _check_rate_limit(request, user)
+        return user
 
     if not authorization or not authorization.lower().startswith("bearer "):
         raise HTTPException(status_code=401, detail="Authentication is required.")
 
     token = authorization.split(" ", 1)[1].strip()
     token_user = _validate_bearer_token(token)
+    user = (token_user or "authenticated-user")[:160]
+    _check_rate_limit(request, user)
+    return user
 
-    return (token_user or x_uniphishguard_user or "authenticated-user")[:160]
 
-
-def _check_rate_limit(key: str) -> None:
-    now = time.monotonic()
-    recent = [stamp for stamp in _REQUESTS.get(key, []) if now - stamp < RATE_LIMIT_WINDOW_SECONDS]
-    if len(recent) >= RATE_LIMIT_MAX_REQUESTS:
+def _check_rate_limit(request: Request, user: str) -> None:
+    address = request.client.host if request.client else "local"
+    if os.getenv("TRUST_PROXY_HEADERS", "false").lower() == "true":
+        address = request.headers.get("X-Forwarded-For", address).split(",", 1)[0].strip()
+    if not RATE_LIMITER.check(f"{user}|{address}"):
         raise HTTPException(status_code=429, detail="Too many requests. Please wait and try again.")
-    recent.append(now)
-    _REQUESTS[key] = recent
 
 
 def _validate_bearer_token(token: str) -> str:
@@ -198,7 +218,7 @@ def _analyze_email_route(email: EmailAnalysisRequest, user_id: str) -> EmailAnal
         _log_scan_error(error)
         raise HTTPException(
             status_code=500,
-            detail={"code": "SCAN_FAILED", "message": "Scan failed inside backend. Check backend/data/errors.log."},
+            detail={"code": "SCAN_FAILED", "message": "The email could not be analyzed."},
         ) from error
 
 

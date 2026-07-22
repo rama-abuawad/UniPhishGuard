@@ -41,6 +41,8 @@ def init_db() -> None:
         columns = {row[1] for row in conn.execute("PRAGMA table_info(scans)").fetchall()}
         if "user_id" not in columns:
             conn.execute("ALTER TABLE scans ADD COLUMN user_id TEXT NOT NULL DEFAULT 'local'")
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_scans_user_id ON scans(user_id)")
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_scans_scanned_at ON scans(scanned_at)")
         _cleanup_old_scans(conn)
 
 

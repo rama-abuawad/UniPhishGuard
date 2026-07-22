@@ -267,10 +267,11 @@ def test_auth_required_blocks_history(monkeypatch) -> None:
 
     monkeypatch.setattr(main, "REQUIRE_AUTH", True)
     monkeypatch.setattr(main, "API_TOKEN", "test-token")
-    monkeypatch.setattr(main, "_REQUESTS", {})
+    main.RATE_LIMITER.reset()
 
     class Request:
         client = type("Client", (), {"host": "127.0.0.1"})()
+        headers = {}
 
     try:
         main.current_user(Request(), authorization=None)
@@ -378,12 +379,16 @@ def test_rate_limit_blocks_repeated_requests(monkeypatch) -> None:
     from fastapi import HTTPException
     import app.main as main
 
-    monkeypatch.setattr(main, "_REQUESTS", {})
-    monkeypatch.setattr(main, "RATE_LIMIT_MAX_REQUESTS", 1)
+    from app.rate_limit import LocalRateLimiter
+    monkeypatch.setattr(main, "RATE_LIMITER", LocalRateLimiter(1))
 
-    main._check_rate_limit("tester")
+    class Request:
+        client = type("Client", (), {"host": "127.0.0.1"})()
+        headers = {}
+
+    main._check_rate_limit(Request(), "tester")
     try:
-        main._check_rate_limit("tester")
+        main._check_rate_limit(Request(), "tester")
     except HTTPException as error:
         assert error.status_code == 429
     else:
@@ -415,7 +420,7 @@ def test_very_long_email_body_still_scans(monkeypatch) -> None:
         EmailAnalysisRequest(
             subject="Long newsletter",
             sender=EmailAddress(name="Conference", email="conference@example.com"),
-            body="Conference update. " * 20000,
+            body="Conference update. " * 9000,
             headers="Authentication-Results: spf=pass dkim=pass dmarc=pass",
         )
     )
