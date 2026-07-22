@@ -1,15 +1,12 @@
 {
   "model_name": "TF-IDF word+character n-grams with calibrated Logistic Regression",
   "model_version": "1.1.0",
-  "training_date": "2026-07-20T10:56:30.900471+00:00",
+  "training_date": "2026-07-22T13:11:25.837995+00:00",
   "phishing_threshold": 0.37,
   "raw_dataset_size": 11000,
   "dataset_size": 10036,
   "exact_duplicates_removed": 964,
-  "sources": {
-    "generated_university_examples": "data\\training_emails.csv",
-    "kd_10000_dataset": "data\\phishing_legit_dataset_KD_10000.csv"
-  },
+  "source": "data\\training_dataset.csv",
   "train_size": 7025,
   "validation_size": 1505,
   "test_size": 1506,

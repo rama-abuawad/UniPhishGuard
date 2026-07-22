@@ -139,7 +139,7 @@ async function findBackend() {
     }
   }
 
-  throw new Error(`Backend is not reachable. Start it with run_https.cmd and open https://localhost:8000/health. Tried: ${errors.join("; ")}`);
+  throw new Error(`Backend is not reachable. Start FastAPI and open https://localhost:8000/health. Tried: ${errors.join("; ")}`);
 }
 
 // -----------------------------------------------------------------------------
