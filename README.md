@@ -95,6 +95,10 @@ Training performs exact-text deduplication, stratified train/validation/test spl
 
 The model is an English-focused baseline. Treat its probability as one signal, not proof that a message is malicious. Dataset provenance, licensing, language coverage, class balance, false-positive rate, and false-negative rate should be reviewed before production use.
 
+The complete provenance and limitations record is in [`backend/data/DATASET_CARD.md`](backend/data/DATASET_CARD.md). The consolidated file contains 11,000 records: repository history identifies 1,000 as locally template-generated, while the source and licence for the other 10,000 cannot currently be verified. **Source or licence requires verification before public redistribution.**
+
+Internal evaluation results may not represent real-world university email performance. External validation is required before production use. Current language coverage is primarily English; the project does not claim Arabic or multilingual phishing-detection performance.
+
 ## Rule-based analysis
 
 Rules cover:
@@ -105,6 +109,8 @@ Rules cover:
 - dangerous, double-extension, macro-enabled, MIME-mismatched, and archive attachments;
 - QR-code links and archive contents within bounded processing limits;
 - university-domain lookalikes and fake campus services.
+
+URL analysis is heuristic and does not confirm whether a domain is currently listed as malicious. UniPhishGuard does not send URLs or email content to an external reputation provider.
 
 Weights and category caps are configured in `backend/app/settings.json`. High-impact rule evidence can outweigh the statistical model, while per-category caps prevent repeated similar indicators from dominating the score.
 
