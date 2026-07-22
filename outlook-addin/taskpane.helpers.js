@@ -59,13 +59,36 @@
           .map((indicator) => `- ${String(indicator.severity || "").toUpperCase()}: ${indicator.message}`)
           .join("\n")
       : "- No major indicators found";
+    const breakdown = (report.score_breakdown || []).length
+      ? report.score_breakdown
+          .map((item) => `- ${item.label}: ${item.score}/${item.cap}`)
+          .join("\n")
+      : "- No score components added";
+    const aiEvidence = (report.ai_evidence || []).length
+      ? report.ai_evidence.map((phrase) => `- ${phrase}`).join("\n")
+      : "- No specific suspicious language found";
+    const hashes = (report.attachment_hashes || []).length
+      ? report.attachment_hashes.map((value) => `- ${value}`).join("\n")
+      : "- No attachment content hash available";
+    const qrLinks = (report.decoded_qr_links || []).length
+      ? report.decoded_qr_links.map((link) => `- ${link.href}`).join("\n")
+      : "- No QR link found";
 
     return [
       "UniPhishGuard report",
       `Verdict: ${report.verdict}`,
       `Threat level: ${threatLevel.label}`,
       `Risk score: ${report.risk_score}/100`,
-      `AI confidence: ${Math.round((report.ai_confidence || 0) * 100)}%`,
+      `AI phishing probability: ${Math.round((report.ai_confidence || 0) * 100)}%`,
+      `URL reputation: ${report.url_reputation_status || "not_configured"} (${report.url_reputation_checked || 0} checked)`,
+      "Score breakdown:",
+      breakdown,
+      "AI language evidence:",
+      aiEvidence,
+      "Attachment hashes:",
+      hashes,
+      "Decoded QR links:",
+      qrLinks,
       "Threat categories:",
       categories,
       "Indicators:",

@@ -4,6 +4,9 @@ import json
 import sqlite3
 from pathlib import Path
 from datetime import datetime, timedelta, timezone
+import hmac
+import hashlib
+import os
 
 from .models import EmailAnalysisRequest, EmailAnalysisResponse, HistoryItem
 
@@ -11,6 +14,7 @@ from .models import EmailAnalysisRequest, EmailAnalysisResponse, HistoryItem
 DB_PATH = Path(__file__).resolve().parents[1] / "data" / "uniphishguard.db"
 HISTORY_LIMIT = 50
 RETENTION_DAYS = 30
+HMAC_SECRET = os.getenv("HISTORY_HMAC_SECRET", "local-dev-history-secret").encode("utf-8")
 
 
 def init_db() -> None:
@@ -62,7 +66,7 @@ def save_scan(email: EmailAnalysisRequest, result: EmailAnalysisResponse, user_i
             """,
             (
                 _redact_subject(email.subject),
-                _redact_sender(str(email.sender.email)),
+                _pseudonymize_sender(str(email.sender.email)),
                 user_id[:160],
                 result.verdict,
                 result.risk_score,
@@ -113,17 +117,28 @@ def get_history(user_id: str = "local", limit: int = 10) -> list[HistoryItem]:
     ]
 
 
+def clear_history(user_id: str = "local") -> int:
+    init_db()
+    with sqlite3.connect(DB_PATH) as conn:
+        cursor = conn.execute("DELETE FROM scans WHERE user_id = ?", (user_id[:160],))
+        return cursor.rowcount
+
+
 def _redact_subject(subject: str) -> str:
     subject = (subject or "").strip()
     return subject[:120] if subject else "(No subject)"
 
 
-def _redact_sender(sender: str) -> str:
+def _pseudonymize_sender(sender: str) -> str:
     sender = (sender or "").strip()
     if "@" not in sender:
-        return sender[:120]
-    name, domain = sender.rsplit("@", 1)
-    return f"{name[:2]}***@{domain[:100]}"
+        return _hmac_value(sender)
+    _, domain = sender.rsplit("@", 1)
+    return f"{_hmac_value(sender)}@{domain[:100]}"
+
+
+def _hmac_value(value: str) -> str:
+    return hmac.new(HMAC_SECRET, value.lower().encode("utf-8"), hashlib.sha256).hexdigest()[:12]
 
 
 def _cleanup_old_scans(conn: sqlite3.Connection) -> None:

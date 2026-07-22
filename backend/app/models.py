@@ -10,6 +10,7 @@ class AttachmentInfo(BaseModel):
     name: str
     content_type: str | None = None
     size: int | None = Field(default=None, ge=0)
+    content_base64: str | None = None
 
 
 class LinkInfo(BaseModel):
@@ -49,6 +50,13 @@ class ThreatLevel(BaseModel):
     score_floor: int = Field(ge=0, le=100)
 
 
+class ScoreComponent(BaseModel):
+    code: str
+    label: str
+    score: int = Field(ge=0, le=100)
+    cap: int = Field(ge=0, le=100)
+
+
 class EmailAnalysisResponse(BaseModel):
     scan_id: int | None = None
     scanned_at: str | None = None
@@ -58,8 +66,15 @@ class EmailAnalysisResponse(BaseModel):
     threat_categories: list[ThreatCategory] = Field(default_factory=list)
     ai_prediction: str
     ai_confidence: float = Field(ge=0, le=1)
+    ai_evidence: list[str] = Field(default_factory=list)
+    score_breakdown: list[ScoreComponent] = Field(default_factory=list)
+    top_reasons: list[str] = Field(default_factory=list)
     url_count: int = 0
+    url_reputation_checked: int = 0
+    url_reputation_status: str = "not_configured"
     attachment_count: int = 0
+    attachment_hashes: list[str] = Field(default_factory=list)
+    decoded_qr_links: list[LinkInfo] = Field(default_factory=list)
     indicators: list[Indicator]
     recommended_actions: list[str]
 

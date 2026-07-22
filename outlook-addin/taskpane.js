@@ -3,6 +3,7 @@ const configuredApi = window.UNIPHISHGUARD_API_BASE_URL || "https://localhost:80
 const devApi = window.UNIPHISHGUARD_ALLOW_API_OVERRIDE && params.get("api")
   ? params.get("api").replace(/\/analyze-email\/?$/, "")
   : null;
+const useSampleEmail = params.get("sample") === "1";
 const fallbackApis = window.UNIPHISHGUARD_API_FALLBACK_URLS || [];
 const API_BASE_URLS = [devApi || configuredApi, ...fallbackApis].filter(Boolean);
 const API_TOKEN = window.UNIPHISHGUARD_API_TOKEN || "";
@@ -14,17 +15,30 @@ const resultEl = document.getElementById("result");
 const statusEl = document.getElementById("connectionStatus");
 const runtimeNoteEl = document.getElementById("runtimeNote");
 let lastReport = null;
+let buttonsBound = false;
 
-if (window.Office) {
+bindButtons();
+
+if (window.Office && Office.onReady) {
   Office.onReady(() => {
-    scanButton.addEventListener("click", scanCurrentEmail);
-    historyButton.addEventListener("click", loadHistory);
+    bindButtons();
   });
 } else {
   runtimeNoteEl.hidden = false;
-  runtimeNoteEl.textContent = "Browser preview uses sample email data. Use Outlook to scan a real email.";
-  scanButton.addEventListener("click", scanCurrentEmail);
-  historyButton.addEventListener("click", loadHistory);
+  runtimeNoteEl.textContent = useSampleEmail
+    ? "Browser preview is using sample email data."
+    : "Use Outlook to scan a real email.";
+}
+
+function bindButtons() {
+  if (buttonsBound) {
+    return;
+  }
+  if (scanButton && historyButton) {
+    scanButton.addEventListener("click", scanCurrentEmail);
+    historyButton.addEventListener("click", loadHistory);
+    buttonsBound = true;
+  }
 }
 
 async function scanCurrentEmail() {
@@ -96,10 +110,28 @@ async function findBackend() {
 }
 
 async function getCurrentEmail() {
-  const item = Office.context?.mailbox?.item;
+  await waitForOfficeHost();
+  const item = await waitForCurrentItem();
+  const mailbox = window.Office?.context?.mailbox;
 
   if (!item) {
-    return sampleEmail();
+    if (useSampleEmail && (!window.Office || !mailbox)) {
+      return sampleEmail();
+    }
+
+    throw new Error(`Outlook did not expose the selected email to the add-in (${officeDiagnostic()}). Close and reopen this pane.`);
+  }
+
+  if (looksLikeEmptyOutlookItem(item)) {
+    throw new Error("Outlook did not provide the selected email yet. Re-select it, wait a moment, then scan again.");
+  }
+
+  if (!item.body?.getAsync) {
+    if (useSampleEmail && (!window.Office || !mailbox)) {
+      return sampleEmail();
+    }
+
+    throw new Error("Outlook did not provide the email body. Re-open the add-in and scan again.");
   }
 
   const body = await getBodyText(item);
@@ -126,6 +158,43 @@ async function getCurrentEmail() {
       size: attachment.size || null,
     })),
   };
+}
+
+async function waitForOfficeHost(timeoutMs = 10000) {
+  if (!window.uniphishguardOfficeReady) {
+    return;
+  }
+
+  await Promise.race([
+    window.uniphishguardOfficeReady,
+    new Promise((resolve) => setTimeout(resolve, timeoutMs)),
+  ]);
+}
+
+function officeDiagnostic() {
+  const office = Boolean(window.Office);
+  const context = Boolean(window.Office?.context);
+  const mailbox = Boolean(window.Office?.context?.mailbox);
+  const item = Boolean(window.Office?.context?.mailbox?.item);
+  return `Office=${office}, context=${context}, mailbox=${mailbox}, item=${item}`;
+}
+
+async function waitForCurrentItem(timeoutMs = 8000) {
+  const deadline = Date.now() + timeoutMs;
+
+  while (Date.now() < deadline) {
+    const item = window.Office?.context?.mailbox?.item;
+    if (item) {
+      return item;
+    }
+    await new Promise((resolve) => setTimeout(resolve, 250));
+  }
+
+  return null;
+}
+
+function looksLikeEmptyOutlookItem(item) {
+  return !item.subject && !item.from && !item.sender && !item.body;
 }
 
 function getBodyHtml(item) {
@@ -191,15 +260,18 @@ function renderReport(report) {
   const verdictClass = threatLevelClassName(threatLevel.code, report.verdict);
   const threatColor = safeColor(threatLevel.color);
   const confidencePercent = Math.round(report.ai_confidence * 100);
+  const reputationStatus = report.url_reputation_status === "checked"
+    ? `${report.url_reputation_checked || 0} URL(s) checked externally`
+    : report.url_reputation_status === "unavailable"
+      ? "external service unavailable"
+      : "not configured";
   const categories = renderThreatCategories(report.threat_categories || []);
-  const indicators = report.indicators.length
-    ? report.indicators.map((indicator) => `
-      <li class="${escapeHtml(indicator.severity)}">
-        <strong>${escapeHtml(indicator.severity.toUpperCase())}</strong><br>
-        ${escapeHtml(indicator.message)}
-      </li>
-    `).join("")
-    : "<li>No major indicators detected.</li>";
+  const breakdown = renderScoreBreakdown(report.score_breakdown || []);
+  const topReasons = renderSimpleList(report.top_reasons || [], "No strong reason found.");
+  const aiEvidence = renderSimpleList(report.ai_evidence || [], "No specific suspicious language found.");
+  const attachmentHashes = renderSimpleList(report.attachment_hashes || [], "No attachment content hash available.");
+  const qrLinks = renderQrLinks(report.decoded_qr_links || []);
+  const groupedIndicators = renderIndicatorSections(report.indicators || []);
 
   const actions = report.recommended_actions
     .map((action) => `<li>${escapeHtml(action)}</li>`)
@@ -215,7 +287,8 @@ function renderReport(report) {
           </span>
           <h2>${escapeHtml(report.verdict)}</h2>
           <p class="meta">Scan #${escapeHtml(report.scan_id || "-")} ${escapeHtml(report.scanned_at || "")}</p>
-          <p class="meta">AI phishing detection: ${formatPrediction(report.ai_prediction)} - ${confidencePercent}% AI confidence</p>
+          <p class="meta">AI language check: ${formatPrediction(report.ai_prediction)} - ${confidencePercent}% phishing probability</p>
+          <p class="meta">URL reputation: ${escapeHtml(reputationStatus)}</p>
         </div>
         <div class="score">${report.risk_score}</div>
       </div>
@@ -232,7 +305,7 @@ function renderReport(report) {
 
       <div class="meter-block">
         <div class="meter-row">
-          <span>AI confidence</span>
+          <span>AI phishing probability</span>
           <strong>${confidencePercent}%</strong>
         </div>
         <div class="meter">
@@ -258,8 +331,22 @@ function renderReport(report) {
       <p class="section-title">Threat Category</p>
       <div class="category-list">${categories}</div>
 
-      <p class="section-title">Why This Result?</p>
-      <ul class="list">${indicators}</ul>
+      <p class="section-title">Score Breakdown</p>
+      <div class="breakdown-list">${breakdown}</div>
+
+      <p class="section-title">Strongest Reasons</p>
+      <ul class="list">${topReasons}</ul>
+
+      <p class="section-title">AI Language Assessment</p>
+      <ul class="list">${aiEvidence}</ul>
+
+      <p class="section-title">Attachment Hashes</p>
+      <ul class="list">${attachmentHashes}</ul>
+
+      <p class="section-title">Decoded QR Links</p>
+      <ul class="list">${qrLinks}</ul>
+
+      ${groupedIndicators}
 
       <p class="section-title">What Should You Do?</p>
       <ul class="list">${actions}</ul>
@@ -300,6 +387,72 @@ function renderThreatCategories(categories) {
       <small>${escapeHtml(category.reason)}</small>
     </div>
   `).join("");
+}
+
+function renderScoreBreakdown(items) {
+  if (!items.length) {
+    return '<p class="empty-inline">No score components added.</p>';
+  }
+
+  return items.map((item) => `
+    <div class="breakdown-item">
+      <span>${escapeHtml(item.label)}</span>
+      <strong>${escapeHtml(item.score)}/${escapeHtml(item.cap)}</strong>
+    </div>
+  `).join("");
+}
+
+function renderSimpleList(items, emptyText) {
+  return items.length
+    ? items.map((item) => `<li class="low">${escapeHtml(item)}</li>`).join("")
+    : `<li>${escapeHtml(emptyText)}</li>`;
+}
+
+function renderQrLinks(links) {
+  return links.length
+    ? links.map((link) => `<li class="medium">${escapeHtml(link.href)}</li>`).join("")
+    : "<li>No QR link found.</li>";
+}
+
+function renderIndicatorSections(indicators) {
+  const groups = [
+    ["Sender Authentication", ["spf_", "dkim_", "dmarc_", "auth_", "forwarding_"]],
+    ["URL Analysis", ["url_", "link_", "approved_domain", "external_sender"]],
+    ["Attachment Analysis", ["attachment", "double_extension", "dangerous_attachment", "macro_", "archive_"]],
+    ["Sender and University Checks", ["reply_to", "university_", "untrusted_", "fake_university"]],
+  ];
+
+  const used = new Set();
+  const sections = groups.map(([title, prefixes]) => {
+    const matches = indicators.filter((indicator) => {
+      const matched = prefixes.some((prefix) => indicator.code.startsWith(prefix));
+      if (matched) {
+        used.add(indicator);
+      }
+      return matched;
+    });
+    return renderIndicatorSection(title, matches);
+  });
+
+  const other = indicators.filter((indicator) => !used.has(indicator));
+  sections.push(renderIndicatorSection("Other Evidence", other));
+  return sections.join("");
+}
+
+function renderIndicatorSection(title, indicators) {
+  const body = indicators.length
+    ? indicators.map((indicator) => `
+      <li class="${escapeHtml(indicator.severity)}">
+        <strong>${escapeHtml(indicator.severity.toUpperCase())}</strong><br>
+        ${escapeHtml(indicator.message)}
+      </li>
+    `).join("")
+    : "<li>No issue found in this section.</li>";
+
+  return `
+    <p class="section-title">${escapeHtml(title)}</p>
+    <ul class="list">${body}</ul>
+  `;
 }
 
 function renderError(error) {

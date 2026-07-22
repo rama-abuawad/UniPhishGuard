@@ -1,4 +1,8 @@
 {
+  "model_name": "TF-IDF word+character n-grams with calibrated Logistic Regression",
+  "model_version": "1.1.0",
+  "training_date": "2026-07-20T10:56:30.900471+00:00",
+  "phishing_threshold": 0.37,
   "raw_dataset_size": 11000,
   "dataset_size": 10036,
   "exact_duplicates_removed": 964,
@@ -6,8 +10,9 @@
     "generated_university_examples": "data\\training_emails.csv",
     "kd_10000_dataset": "data\\phishing_legit_dataset_KD_10000.csv"
   },
-  "train_size": 7527,
-  "test_size": 2509,
+  "train_size": 7025,
+  "validation_size": 1505,
+  "test_size": 1506,
   "labels": [
     "legitimate",
     "phishing"
@@ -15,40 +20,45 @@
   "classification_report": {
     "legitimate": {
       "precision": 1.0,
-      "recall": 0.997997997997998,
-      "f1-score": 0.998997995991984,
-      "support": 999.0
+      "recall": 0.9933333333333333,
+      "f1-score": 0.9966555183946488,
+      "support": 600.0
     },
     "phishing": {
-      "precision": 0.9986772486772487,
+      "precision": 0.9956043956043956,
       "recall": 1.0,
-      "f1-score": 0.99933818663137,
-      "support": 1510.0
+      "f1-score": 0.9977973568281938,
+      "support": 906.0
     },
-    "accuracy": 0.9992028696691909,
+    "accuracy": 0.99734395750332,
     "macro avg": {
-      "precision": 0.9993386243386244,
-      "recall": 0.998998998998999,
-      "f1-score": 0.9991680913116769,
-      "support": 2509.0
+      "precision": 0.9978021978021978,
+      "recall": 0.9966666666666666,
+      "f1-score": 0.9972264376114213,
+      "support": 1506.0
     },
     "weighted avg": {
-      "precision": 0.9992039240743904,
-      "recall": 0.9992028696691909,
-      "f1-score": 0.9992027340810525,
-      "support": 2509.0
+      "precision": 0.9973556324153934,
+      "recall": 0.99734395750332,
+      "f1-score": 0.997342441117618,
+      "support": 1506.0
     }
   },
   "confusion_matrix": [
     [
-      997,
-      2
+      596,
+      4
     ],
     [
       0,
-      1510
+      906
     ]
   ],
+  "false_positive_rate": 0.006666666666666667,
+  "false_negative_rate": 0.0,
+  "roc_auc": 1.0,
+  "pr_auc": 1.0,
+  "language_support": "English baseline. Arabic and mixed Arabic-English examples are not yet included.",
   "runtime": {
     "python": "3.14.3",
     "scikit_learn": "1.9.0",

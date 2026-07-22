@@ -32,11 +32,15 @@ function testBuildReportText() {
     risk_score: 72,
     ai_confidence: 0.91,
     threat_level: { label: "High Risk" },
+    score_breakdown: [{ label: "URL Analysis", score: 35, cap: 45 }],
+    ai_evidence: ["verify your account"],
     threat_categories: [{ label: "Credential Theft", evidence_strength: "high" }],
     indicators: [{ severity: "high", message: "Link mismatch." }],
   });
 
   assert(text.includes("Verdict: Likely phishing"));
+  assert(text.includes("URL Analysis: 35/45"));
+  assert(text.includes("verify your account"));
   assert(text.includes("Credential Theft (high evidence)"));
   assert(text.includes("HIGH: Link mismatch."));
 }

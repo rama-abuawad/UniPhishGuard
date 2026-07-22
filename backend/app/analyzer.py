@@ -1,49 +1,33 @@
 from __future__ import annotations
 
 import re
+import base64
+import binascii
+import hashlib
+import io
+import zipfile
 from email.utils import parseaddr
 from html.parser import HTMLParser
 from html import unescape
 from ipaddress import ip_address
 from urllib.parse import unquote, urlparse
 
-from .ai import predict_email_risk
-from .models import EmailAnalysisRequest, EmailAnalysisResponse, Indicator, LinkInfo, ThreatCategory, ThreatLevel
+import cv2
+import numpy as np
+
+from .ai import explain_email_risk, predict_email_risk
+from .config import organization_config, scoring_config
+from .models import EmailAnalysisRequest, EmailAnalysisResponse, Indicator, LinkInfo, ScoreComponent, ThreatCategory, ThreatLevel
+from .url_reputation import check_url_reputation
 
 
 URL_RE = re.compile(r"https?://[^\s<>\"]+", re.IGNORECASE)
 
-# Domains controlled by ADU. These are the only domains that create sender trust.
-APPROVED_SENDER_DOMAINS = {
-    "adu.ac.ae",
-    "info.adu.ac.ae",
-    "students.adu.ac.ae",
-    "university.edu",
-}
-
-# Known ADU service/link domains. Useful context, but not proof that a message is safe.
-APPROVED_LINK_DOMAINS = {
-    "adu.ac.ae",
-    "info.adu.ac.ae",
-    "students.adu.ac.ae",
-    "aduac-my.sharepoint.com",
-    "aduac.sharepoint.com",
-    "studentsaduac-my.sharepoint.com",
-    "studentsaduac.sharepoint.com",
-}
-
-COMMON_HOSTING_DOMAINS = {
-    "office.com",
-    "microsoft.com",
-    "microsoftonline.com",
-    "outlook.com",
-    "live.com",
-    "sharepoint.com",
-    "onedrive.live.com",
-    "google.com",
-    "drive.google.com",
-    "dropbox.com",
-}
+ORG_CONFIG = organization_config()
+SCORING_CONFIG = scoring_config()
+APPROVED_SENDER_DOMAINS = set(ORG_CONFIG["sender_domains"])
+APPROVED_LINK_DOMAINS = set(ORG_CONFIG["link_domains"])
+COMMON_HOSTING_DOMAINS = set(ORG_CONFIG["common_hosting_domains"])
 
 URL_SHORTENERS = {
     "bit.ly",
@@ -58,10 +42,7 @@ URL_SHORTENERS = {
 }
 
 # Words used to spot fake university branding.
-UNIVERSITY_BRAND_TERMS = {
-    "adu",
-    "abu dhabi university",
-}
+UNIVERSITY_BRAND_TERMS = set(ORG_CONFIG["brand_terms"])
 
 # Common university services used in scams.
 UNIVERSITY_SERVICE_TERMS = {
@@ -138,6 +119,8 @@ HIGH_RISK_EXTENSIONS = {
     ".iso",
     ".lnk",
 }
+MACRO_EXTENSIONS = {".docm", ".xlsm", ".pptm"}
+ARCHIVE_EXTENSIONS = {".zip", ".rar", ".7z"}
 AUTH_FAILURE_MESSAGES = {
     "spf": "SPF warning: the sending server was not approved for this sender domain.",
     "dkim": (
@@ -159,20 +142,30 @@ AUTH_PLAIN_EXPLANATIONS = {
 AUTH_BAD_RESULTS = {"fail", "softfail", "permerror", "temperror"}
 AUTH_PASS_RESULTS = {"pass"}
 AUTH_INCONCLUSIVE_RESULTS = {"neutral", "none", "policy", "bestguesspass"}
+MAX_ATTACHMENT_BYTES = 5_000_000
+MAX_ZIP_ENTRIES = 50
+MAX_ZIP_UNCOMPRESSED_BYTES = 20_000_000
 
 
 def analyze_email(email: EmailAnalysisRequest) -> EmailAnalysisResponse:
     indicators: list[Indicator] = []
     links = _collect_links(email)
+    attachment_indicators, attachment_hashes, qr_links = _check_attachments(email)
+    links.extend(qr_links)
     url_count = len({link.href for link in links})
 
     indicators.extend(_check_sender_reply_to(email))
     indicators.extend(_check_authentication_results(email.headers, email.headers_status))
     indicators.extend(_check_urls(email, links))
-    indicators.extend(_check_attachments(email))
+    reputation_indicators, reputation_checked, reputation_status = check_url_reputation(
+        {link.href for link in links}
+    )
+    indicators.extend(reputation_indicators)
+    indicators.extend(attachment_indicators)
     indicators.extend(_check_university_impersonation(email))
 
     ai_prediction, ai_confidence = predict_email_risk(email)
+    ai_evidence = explain_email_risk(email)
     trusted_context = _has_trusted_sender_context(email)
     if ai_prediction == "phishing" and not trusted_context and ai_confidence >= 0.75:
         indicators.append(
@@ -184,7 +177,7 @@ def analyze_email(email: EmailAnalysisRequest) -> EmailAnalysisResponse:
         )
 
     categories = _detect_threat_categories(email, indicators)
-    score = _score(indicators, ai_prediction, ai_confidence)
+    score, score_breakdown = _score(indicators, ai_prediction, ai_confidence)
     return EmailAnalysisResponse(
         verdict=_verdict(score),
         risk_score=score,
@@ -192,8 +185,15 @@ def analyze_email(email: EmailAnalysisRequest) -> EmailAnalysisResponse:
         threat_categories=categories,
         ai_prediction=ai_prediction,
         ai_confidence=ai_confidence,
+        ai_evidence=ai_evidence,
+        score_breakdown=score_breakdown,
+        top_reasons=_top_reasons(indicators, ai_evidence),
         url_count=url_count,
+        url_reputation_checked=reputation_checked,
+        url_reputation_status=reputation_status,
         attachment_count=len(email.attachments),
+        attachment_hashes=attachment_hashes,
+        decoded_qr_links=qr_links,
         indicators=indicators,
         recommended_actions=_recommended_actions(score, indicators),
     )
@@ -470,13 +470,16 @@ def _has_auth_alignment_problem(blocks: list[str]) -> bool:
     return False
 
 
-def _check_attachments(email: EmailAnalysisRequest) -> list[Indicator]:
+def _check_attachments(email: EmailAnalysisRequest) -> tuple[list[Indicator], list[str], list[LinkInfo]]:
     indicators: list[Indicator] = []
+    hashes: list[str] = []
+    qr_links: list[LinkInfo] = []
 
     for attachment in email.attachments:
         lowered_name = _normalize_filename(attachment.name)
         final_ext = _final_extension(lowered_name)
         content_type = (attachment.content_type or "").lower()
+        content = _safe_attachment_bytes(attachment.content_base64)
 
         double_match = re.search(r"\.(pdf|docx?|xlsx?|pptx?)\.(exe|scr|js|vbs|bat|cmd|ps1)$", lowered_name)
         if double_match:
@@ -495,6 +498,22 @@ def _check_attachments(email: EmailAnalysisRequest) -> list[Indicator]:
                     message=f"Attachment has a high-risk extension: {attachment.name}",
                 )
             )
+        elif final_ext in MACRO_EXTENSIONS:
+            indicators.append(
+                Indicator(
+                    code="macro_enabled_attachment",
+                    severity="medium",
+                    message=f"Attachment is a macro-enabled Office file: {attachment.name}",
+                )
+            )
+        elif final_ext in ARCHIVE_EXTENSIONS:
+            indicators.append(
+                Indicator(
+                    code="archive_attachment",
+                    severity="low",
+                    message=f"Attachment is an archive file and its contents were not opened: {attachment.name}",
+                )
+            )
 
         if _mime_extension_mismatch(final_ext, content_type):
             indicators.append(
@@ -505,7 +524,90 @@ def _check_attachments(email: EmailAnalysisRequest) -> list[Indicator]:
                 )
             )
 
+        if content:
+            hashes.append(hashlib.sha256(content).hexdigest())
+            indicators.extend(_inspect_zip_attachment(attachment.name, content, final_ext, content_type))
+            decoded_link = _decode_qr_attachment(attachment.name, content, content_type)
+            if decoded_link:
+                qr_links.append(decoded_link)
+                indicators.append(
+                    Indicator(
+                        code="qr_code_link_detected",
+                        severity="medium",
+                        message=f"QR code in attachment points to: {decoded_link.href}",
+                    )
+                )
+
+    return indicators, hashes, qr_links
+
+
+def _safe_attachment_bytes(content_base64: str | None) -> bytes | None:
+    if not content_base64:
+        return None
+    try:
+        content = base64.b64decode(content_base64, validate=True)
+    except (binascii.Error, ValueError):
+        return None
+    if len(content) > MAX_ATTACHMENT_BYTES:
+        return None
+    return content
+
+
+def _inspect_zip_attachment(name: str, content: bytes, ext: str, content_type: str) -> list[Indicator]:
+    if ext != ".zip" and "zip" not in content_type and not zipfile.is_zipfile(io.BytesIO(content)):
+        return []
+
+    indicators: list[Indicator] = []
+    try:
+        with zipfile.ZipFile(io.BytesIO(content)) as archive:
+            entries = archive.infolist()
+            total_size = sum(entry.file_size for entry in entries)
+            if len(entries) > MAX_ZIP_ENTRIES or total_size > MAX_ZIP_UNCOMPRESSED_BYTES:
+                indicators.append(
+                    Indicator(
+                        code="zip_limits_exceeded",
+                        severity="medium",
+                        message=f"ZIP attachment is too large or complex to inspect fully: {name}",
+                    )
+                )
+                return indicators
+
+            for entry in entries:
+                entry_name = _normalize_filename(entry.filename)
+                entry_ext = _final_extension(entry_name)
+                if entry_ext in HIGH_RISK_EXTENSIONS or entry_ext in MACRO_EXTENSIONS:
+                    indicators.append(
+                        Indicator(
+                            code="zip_contains_risky_file",
+                            severity="high",
+                            message=f"ZIP attachment contains a risky file: {entry.filename}",
+                        )
+                    )
+                    break
+    except zipfile.BadZipFile:
+        indicators.append(
+            Indicator(
+                code="zip_attachment_unreadable",
+                severity="medium",
+                message=f"ZIP attachment could not be inspected safely: {name}",
+            )
+        )
     return indicators
+
+
+def _decode_qr_attachment(name: str, content: bytes, content_type: str) -> LinkInfo | None:
+    if not content_type.startswith("image/") and _final_extension(_normalize_filename(name)) not in {".png", ".jpg", ".jpeg"}:
+        return None
+    data = np.frombuffer(content, dtype=np.uint8)
+    image = cv2.imdecode(data, cv2.IMREAD_GRAYSCALE)
+    if image is None:
+        return None
+    detector = cv2.QRCodeDetector()
+    value, _, _ = detector.detectAndDecode(image)
+    value = (value or "").strip()
+    if value.lower().startswith(("http://", "https://")):
+        return LinkInfo(text="QR code link", href=value)
+    return None
 
 
 def _check_university_impersonation(email: EmailAnalysisRequest) -> list[Indicator]:
@@ -676,15 +778,53 @@ def _score(
     indicators: list[Indicator],
     ai_prediction: str,
     ai_confidence: float,
-) -> int:
-    # Simple score weights for the risk meter.
-    severity_weights = {"low": 8, "medium": 18, "high": 30}
-    score = sum(severity_weights.get(indicator.severity, 0) for indicator in indicators)
+) -> tuple[int, list[ScoreComponent]]:
+    indicator_weights = SCORING_CONFIG["indicator_weights"]
+    indicator_categories = SCORING_CONFIG["indicator_categories"]
+    caps = SCORING_CONFIG["category_caps"]
+    raw_components = {category: 0 for category in caps}
 
     if ai_prediction == "phishing" and ai_confidence >= 0.75:
-        score += round(24 * ai_confidence)
+        raw_components["ai_language"] += round(SCORING_CONFIG["ai_phishing_weight"] * ai_confidence)
 
-    return max(0, min(score, 100))
+    for indicator in indicators:
+        category = indicator_categories.get(indicator.code, "other")
+        raw_components[category] = raw_components.get(category, 0) + indicator_weights.get(
+            indicator.code,
+            {"low": 6, "medium": 16, "high": 28}.get(indicator.severity, 0),
+        )
+
+    components = [
+        ScoreComponent(
+            code=code,
+            label=_component_label(code),
+            score=min(score, caps.get(code, 100)),
+            cap=caps.get(code, 100),
+        )
+        for code, score in raw_components.items()
+        if min(score, caps.get(code, 100)) > 0
+    ]
+    final_score = sum(component.score for component in components)
+    return max(0, min(final_score, 100)), components
+
+
+def _component_label(code: str) -> str:
+    return {
+        "ai_language": "AI Language",
+        "authentication": "Sender Authentication",
+        "sender_identity": "Sender Identity",
+        "urls": "URL Analysis",
+        "attachments": "Attachment Analysis",
+        "university_impersonation": "University Impersonation",
+        "other": "Other Evidence",
+    }.get(code, code.replace("_", " ").title())
+
+
+def _top_reasons(indicators: list[Indicator], ai_evidence: list[str]) -> list[str]:
+    high_priority = [indicator.message for indicator in indicators if indicator.severity == "high"]
+    medium_priority = [indicator.message for indicator in indicators if indicator.severity == "medium"]
+    ai_reasons = [f"AI noticed: {phrase}" for phrase in ai_evidence[:2]]
+    return (high_priority + medium_priority + ai_reasons)[:3]
 
 
 def _verdict(score: int) -> str:

@@ -3,6 +3,7 @@ import os
 import time
 from pathlib import Path
 import traceback
+from uuid import uuid4
 
 import jwt
 from jwt import PyJWKClient
@@ -11,8 +12,9 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
 
+from .ai import MODEL_PATH, _load_model
 from .analyzer import analyze_email
-from .db import get_history, init_db, save_scan
+from .db import clear_history, get_history, init_db, save_scan
 from .models import EmailAnalysisRequest, EmailAnalysisResponse, HistoryItem
 
 
@@ -70,14 +72,25 @@ if OUTLOOK_ADDIN_DIR.exists():
 
 @app.middleware("http")
 async def limit_request_size(request: Request, call_next):
+    request_id = request.headers.get("X-Request-ID") or uuid4().hex
     content_length = request.headers.get("content-length")
     if content_length:
         try:
             if int(content_length) > MAX_REQUEST_BYTES:
-                return JSONResponse(status_code=413, content={"detail": "Request is too large."})
+                return _error_response(413, "REQUEST_TOO_LARGE", "Request is too large.", request_id)
         except ValueError:
-            return JSONResponse(status_code=400, content={"detail": "Invalid Content-Length header."})
-    return await call_next(request)
+            return _error_response(400, "INVALID_CONTENT_LENGTH", "Invalid Content-Length header.", request_id)
+    response = await call_next(request)
+    response.headers["X-Request-ID"] = request_id
+    response.headers["X-Content-Type-Options"] = "nosniff"
+    response.headers["Referrer-Policy"] = "no-referrer"
+    response.headers["Strict-Transport-Security"] = "max-age=31536000; includeSubDomains"
+    if request.url.path.startswith("/addin/"):
+        response.headers["Cache-Control"] = "no-store, no-cache, must-revalidate, max-age=0"
+        response.headers["Pragma"] = "no-cache"
+    else:
+        response.headers["Content-Security-Policy"] = "default-src 'none'; frame-ancestors 'none'"
+    return response
 
 
 def current_user(
@@ -152,20 +165,66 @@ def health() -> dict[str, str]:
     return {"status": "ok"}
 
 
-@app.post("/analyze-email", response_model=EmailAnalysisResponse)
-def analyze(email: EmailAnalysisRequest, user_id: str = Depends(current_user)) -> EmailAnalysisResponse:
+@app.get("/health/live")
+def health_live() -> dict[str, str]:
+    return {"status": "live"}
+
+
+@app.get("/health/ready")
+def health_ready() -> dict[str, str | bool]:
+    model_exists = MODEL_PATH.exists()
+    model_ready = False
+    if model_exists:
+        try:
+            _load_model()
+            model_ready = True
+        except Exception:
+            model_ready = False
+    return {
+        "status": "ready" if model_ready else "degraded",
+        "database": "ok",
+        "model_exists": model_exists,
+        "model_ready": model_ready,
+        "api_version": "v1",
+    }
+
+
+def _analyze_email_route(email: EmailAnalysisRequest, user_id: str) -> EmailAnalysisResponse:
     try:
         result = analyze_email(email)
         scan_id, scanned_at = save_scan(email, result, user_id=user_id)
         return result.model_copy(update={"scan_id": scan_id, "scanned_at": scanned_at})
     except Exception as error:
         _log_scan_error(error)
-        raise HTTPException(status_code=500, detail="Scan failed inside backend. Check backend/data/errors.log.") from error
+        raise HTTPException(
+            status_code=500,
+            detail={"code": "SCAN_FAILED", "message": "Scan failed inside backend. Check backend/data/errors.log."},
+        ) from error
+
+
+@app.post("/analyze-email", response_model=EmailAnalysisResponse)
+def analyze(email: EmailAnalysisRequest, user_id: str = Depends(current_user)) -> EmailAnalysisResponse:
+    return _analyze_email_route(email, user_id)
+
+
+@app.post("/api/v1/analyze-email", response_model=EmailAnalysisResponse)
+def analyze_v1(email: EmailAnalysisRequest, user_id: str = Depends(current_user)) -> EmailAnalysisResponse:
+    return _analyze_email_route(email, user_id)
 
 
 @app.get("/history", response_model=list[HistoryItem])
 def history(user_id: str = Depends(current_user)) -> list[HistoryItem]:
     return get_history(user_id=user_id)
+
+
+@app.get("/api/v1/history", response_model=list[HistoryItem])
+def history_v1(user_id: str = Depends(current_user)) -> list[HistoryItem]:
+    return get_history(user_id=user_id)
+
+
+@app.delete("/api/v1/history")
+def delete_history(user_id: str = Depends(current_user)) -> dict[str, int]:
+    return {"deleted": clear_history(user_id=user_id)}
 
 
 def _log_scan_error(error: Exception) -> None:
@@ -175,3 +234,11 @@ def _log_scan_error(error: Exception) -> None:
         file.write(time.strftime("%Y-%m-%d %H:%M:%S"))
         file.write(f"\n{type(error).__name__}: {error}\n")
         file.write(traceback.format_exc())
+
+
+def _error_response(status_code: int, code: str, message: str, request_id: str) -> JSONResponse:
+    return JSONResponse(
+        status_code=status_code,
+        content={"error": {"code": code, "message": message, "request_id": request_id}},
+        headers={"X-Request-ID": request_id},
+    )

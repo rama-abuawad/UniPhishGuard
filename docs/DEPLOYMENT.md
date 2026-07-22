@@ -18,6 +18,7 @@ For Render:
 1. Push this repository to GitHub.
 2. Create a Render Blueprint from `render.yaml`.
 3. Set `ALLOWED_ORIGINS` to the hosted add-in site URL.
+4. Set `GOOGLE_WEB_RISK_API_KEY` to enable external URL reputation checks. The backend checks at most 20 URLs per email by default; configure `URL_REPUTATION_MAX_URLS` and `URL_REPUTATION_TIMEOUT_SECONDS` if needed.
 4. Set `REQUIRE_AUTH=true`.
 5. For a quick demo, set `UNIPHISHGUARD_API_TOKEN` to a secret value.
 6. For production, configure Microsoft Entra and set `ENTRA_TENANT_ID` and `ENTRA_CLIENT_ID` instead of using a static token.

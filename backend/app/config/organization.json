@@ -1,0 +1,34 @@
+{
+  "name": "Abu Dhabi University",
+  "sender_domains": [
+    "adu.ac.ae",
+    "info.adu.ac.ae",
+    "students.adu.ac.ae"
+  ],
+  "link_domains": [
+    "adu.ac.ae",
+    "info.adu.ac.ae",
+    "students.adu.ac.ae",
+    "aduac-my.sharepoint.com",
+    "aduac.sharepoint.com",
+    "studentsaduac-my.sharepoint.com",
+    "studentsaduac.sharepoint.com"
+  ],
+  "common_hosting_domains": [
+    "office.com",
+    "microsoft.com",
+    "microsoftonline.com",
+    "outlook.com",
+    "live.com",
+    "sharepoint.com",
+    "onedrive.live.com",
+    "google.com",
+    "drive.google.com",
+    "dropbox.com",
+    "blackboard.com"
+  ],
+  "brand_terms": [
+    "adu",
+    "abu dhabi university"
+  ]
+}

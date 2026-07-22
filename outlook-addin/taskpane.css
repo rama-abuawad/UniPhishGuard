@@ -292,6 +292,26 @@ h1 {
   gap: 8px;
 }
 
+.breakdown-list {
+  display: grid;
+  gap: 6px;
+}
+
+.breakdown-item {
+  align-items: center;
+  background: #f7f9fc;
+  border: 1px solid #d9e1ec;
+  border-radius: 8px;
+  display: flex;
+  font-size: 13px;
+  justify-content: space-between;
+  padding: 8px 10px;
+}
+
+.breakdown-item strong {
+  color: #172033;
+}
+
 .category-chip {
   background: #fff;
   border: 1px solid #d9e1ec;

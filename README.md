@@ -4,6 +4,9 @@ Phishing detection add-in for university email environments.
 
 UniPhishGuard is an Outlook add-in connected to a FastAPI backend. It sends
 details from the opened email to the backend and shows a phishing risk report.
+It is best described as a hybrid AI-assisted detector: the model analyzes
+language while rules analyze sender identity, authentication, URLs and
+attachments.
 
 ## Repository Structure
 
@@ -44,6 +47,7 @@ Outlook Email
 - SPF, DKIM, and DMARC authentication parsing
 - Clear authentication warnings, including user-friendly DKIM explanations
 - Suspicious URL checks, including hidden href mismatches, IP-address links, shorteners, encoded URLs, and unusual domains
+- Optional Google Web Risk reputation checks for malware, phishing/social-engineering, and unwanted-software URLs
 - Attachment checks for dangerous extensions, double-extension files, and MIME/extension mismatches
 - Local SQLite scan history without storing full email bodies and with reduced sender data
 
@@ -85,6 +89,18 @@ Normal emails that mention words like internship, scholarship, HR, or Microsoft
 - Critical
 - Colored risk gauge in the Outlook task pane
 - Risk score remains visible as a number out of 100
+
+## Project Report Notes
+
+- [Architecture](docs/ARCHITECTURE.md)
+- [Threat model](docs/THREAT_MODEL.md)
+- [Model card](docs/MODEL_CARD.md)
+- [Limitations and privacy](docs/LIMITATIONS_AND_PRIVACY.md)
+- [External evaluation](docs/EXTERNAL_EVALUATION.md)
+- [Microsoft Entra production setup](docs/ENTRA_PRODUCTION_SETUP.md)
+
+The current ML baseline is English-focused. Arabic and mixed Arabic-English
+support should be added before claiming multilingual coverage.
 
 ## Quick Start
 
@@ -161,10 +177,7 @@ npm run sideload
 Run automated checks:
 
 ```powershell
-cd backend
-python -m pytest
-
-cd ..\outlook-addin
+cd outlook-addin
 npm.cmd test
 npm.cmd run test:e2e
 ```

@@ -26,13 +26,6 @@ python generate_training_data.py
 python train_model.py
 ```
 
-For tests:
-
-```powershell
-python -m pip install -r requirements-dev.txt
-python -m pytest tests
-```
-
 ## Run for API-Only Testing
 
 ```powershell

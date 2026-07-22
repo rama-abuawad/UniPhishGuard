@@ -13,7 +13,6 @@ if (-not (Get-Command npm.cmd -ErrorAction SilentlyContinue)) {
 Push-Location "$PSScriptRoot\backend"
 try {
   python -m pip install -r requirements.txt
-  python -m pip install -r requirements-dev.txt
 } finally {
   Pop-Location
 }
