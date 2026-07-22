@@ -5,7 +5,10 @@ import base64
 import binascii
 import hashlib
 import io
+import json
 import zipfile
+from functools import lru_cache
+from pathlib import Path
 from email.utils import parseaddr
 from html.parser import HTMLParser
 from html import unescape
@@ -16,9 +19,24 @@ import cv2
 import numpy as np
 
 from .ai import explain_email_risk, predict_email_risk
-from .config import organization_config, scoring_config
 from .schemas import EmailAnalysisRequest, EmailAnalysisResponse, Indicator, LinkInfo, ScoreComponent, ThreatCategory, ThreatLevel
 from .url_reputation import check_url_reputation
+
+
+SETTINGS_PATH = Path(__file__).with_name("settings.json")
+
+
+@lru_cache
+def _settings() -> dict:
+    return json.loads(SETTINGS_PATH.read_text(encoding="utf-8-sig"))
+
+
+def organization_config() -> dict:
+    return _settings()["organization"]
+
+
+def scoring_config() -> dict:
+    return _settings()["scoring"]
 
 
 URL_RE = re.compile(r"https?://[^\s<>\"]+", re.IGNORECASE)
