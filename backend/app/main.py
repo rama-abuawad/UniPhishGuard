@@ -1,8 +1,6 @@
 from contextlib import asynccontextmanager
 import os
-import time
 from pathlib import Path
-import traceback
 from uuid import uuid4
 
 import jwt
@@ -17,6 +15,7 @@ from .analyzer import analyze_email
 from .db import clear_history, get_history, init_db, save_scan
 from .schemas import EmailAnalysisRequest, EmailAnalysisResponse, HistoryItem
 from .rate_limit import LocalRateLimiter
+from .logging_config import configure_logger
 
 
 APP_ENV = os.getenv("APP_ENV", "development").strip().lower()
@@ -39,6 +38,7 @@ RATE_LIMITER = LocalRateLimiter(RATE_LIMIT_MAX_REQUESTS, RATE_LIMIT_WINDOW_SECON
 _JWK_CLIENT: PyJWKClient | None = None
 OUTLOOK_ADDIN_DIR = Path(__file__).resolve().parents[2] / "outlook-addin"
 ERROR_LOG_PATH = Path(__file__).resolve().parents[1] / "data" / "errors.log"
+LOGGER = configure_logger(ERROR_LOG_PATH, APP_ENV)
 
 
 @asynccontextmanager
@@ -85,6 +85,7 @@ if OUTLOOK_ADDIN_DIR.exists():
 @app.middleware("http")
 async def limit_request_size(request: Request, call_next):
     request_id = request.headers.get("X-Request-ID") or uuid4().hex
+    request.state.request_id = request_id
     content_length = request.headers.get("content-length")
     if content_length:
         try:
@@ -180,17 +181,17 @@ def _validate_entra_token(token: str) -> str:
     )
 
 
-@app.get("/health")
+@app.get("/health", summary="Service health", description="Returns a basic liveness result without inspecting the model.")
 def health() -> dict[str, str]:
     return {"status": "ok"}
 
 
-@app.get("/health/live")
+@app.get("/health/live", summary="Liveness probe", description="Indicates that the API process is running.")
 def health_live() -> dict[str, str]:
     return {"status": "live"}
 
 
-@app.get("/health/ready")
+@app.get("/health/ready", summary="Readiness probe", description="Verifies that the trusted model artifact exists, passes integrity checks, and can be loaded.")
 def health_ready() -> dict[str, str | bool]:
     model_exists = MODEL_PATH.exists()
     model_ready = False
@@ -209,35 +210,35 @@ def health_ready() -> dict[str, str | bool]:
     }
 
 
-def _analyze_email_route(email: EmailAnalysisRequest, user_id: str) -> EmailAnalysisResponse:
+def _analyze_email_route(email: EmailAnalysisRequest, user_id: str, request_id: str = "unknown") -> EmailAnalysisResponse:
     try:
         result = analyze_email(email)
         scan_id, scanned_at = save_scan(email, result, user_id=user_id)
         return result.model_copy(update={"scan_id": scan_id, "scanned_at": scanned_at})
     except Exception as error:
-        _log_scan_error(error)
+        _log_scan_error(error, request_id)
         raise HTTPException(
             status_code=500,
             detail={"code": "SCAN_FAILED", "message": "The email could not be analyzed."},
         ) from error
 
 
-@app.post("/analyze-email", response_model=EmailAnalysisResponse)
-def analyze(email: EmailAnalysisRequest, user_id: str = Depends(current_user)) -> EmailAnalysisResponse:
-    return _analyze_email_route(email, user_id)
+@app.post("/analyze-email", response_model=EmailAnalysisResponse, summary="Analyze an email", description="Estimates phishing risk using the saved text model and local rules, then stores limited redacted history.", responses={401: {"description": "Authentication required"}, 413: {"description": "Request too large"}, 422: {"description": "Invalid email schema"}, 429: {"description": "Rate limit exceeded"}, 500: {"description": "Analysis failed; response includes a request ID"}})
+def analyze(request: Request, email: EmailAnalysisRequest, user_id: str = Depends(current_user)) -> EmailAnalysisResponse:
+    return _analyze_email_route(email, user_id, request.state.request_id)
 
 
-@app.post("/api/v1/analyze-email", response_model=EmailAnalysisResponse)
-def analyze_v1(email: EmailAnalysisRequest, user_id: str = Depends(current_user)) -> EmailAnalysisResponse:
-    return _analyze_email_route(email, user_id)
+@app.post("/api/v1/analyze-email", response_model=EmailAnalysisResponse, summary="Analyze an email (v1)", description="Versioned form of the email risk-analysis endpoint.")
+def analyze_v1(request: Request, email: EmailAnalysisRequest, user_id: str = Depends(current_user)) -> EmailAnalysisResponse:
+    return _analyze_email_route(email, user_id, request.state.request_id)
 
 
-@app.get("/history", response_model=list[HistoryItem])
+@app.get("/history", response_model=list[HistoryItem], summary="Recent scan history", description="Returns only the authenticated user's limited, redacted scan history.")
 def history(user_id: str = Depends(current_user)) -> list[HistoryItem]:
     return get_history(user_id=user_id)
 
 
-@app.get("/api/v1/history", response_model=list[HistoryItem])
+@app.get("/api/v1/history", response_model=list[HistoryItem], summary="Recent scan history (v1)", description="Versioned history endpoint; production requires a verified Microsoft identity.")
 def history_v1(user_id: str = Depends(current_user)) -> list[HistoryItem]:
     return get_history(user_id=user_id)
 
@@ -247,18 +248,14 @@ def delete_history(user_id: str = Depends(current_user)) -> dict[str, int]:
     return {"deleted": clear_history(user_id=user_id)}
 
 
-def _log_scan_error(error: Exception) -> None:
-    ERROR_LOG_PATH.parent.mkdir(parents=True, exist_ok=True)
-    with ERROR_LOG_PATH.open("a", encoding="utf-8") as file:
-        file.write("\n--- scan error ---\n")
-        file.write(time.strftime("%Y-%m-%d %H:%M:%S"))
-        file.write(f"\n{type(error).__name__}: {error}\n")
-        file.write(traceback.format_exc())
+def _log_scan_error(error: Exception, request_id: str = "unknown") -> None:
+    # Never include request bodies, headers, tokens, or attachment data.
+    LOGGER.exception("scan_failed exception_type=%s", type(error).__name__, extra={"request_id": request_id})
 
 
 def _error_response(status_code: int, code: str, message: str, request_id: str) -> JSONResponse:
     return JSONResponse(
         status_code=status_code,
-        content={"error": {"code": code, "message": message, "request_id": request_id}},
+        content={"code": code, "message": message, "request_id": request_id},
         headers={"X-Request-ID": request_id},
     )
