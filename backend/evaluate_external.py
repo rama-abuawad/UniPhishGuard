@@ -3,8 +3,7 @@ import json
 from datetime import UTC, datetime
 from pathlib import Path
 
-import joblib
-
+from app.ai import _load_model
 from train_model import METRICS_PATH, MODEL_PATH, evaluate, load_dataset, probabilities, sha256_file
 
 
@@ -15,7 +14,7 @@ def main() -> None:
     args = parser.parse_args()
     rows = load_dataset(args.csv_path)
     metadata = json.loads(METRICS_PATH.read_text(encoding="utf-8"))
-    model = joblib.load(MODEL_PATH)
+    model = _load_model()
     result = {
         "evaluation_type": "external_evaluation",
         "evaluated_at": datetime.now(UTC).isoformat(),

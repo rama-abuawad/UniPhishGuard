@@ -82,6 +82,10 @@ Legacy `/analyze-email` and `/history` aliases remain for the add-in. Interactiv
 
 Copy `backend/.env.example` to `.env` and configure allowed origins, limits, retention, and optional API-token or Microsoft Entra authentication. Never place production secrets in `taskpane.js` or commit them to Git.
 
+`APP_ENV` supports `development`, `testing`, and `production`. Development permits the explicitly insecure local identity header so the add-in can be demonstrated without Entra. Production requires Microsoft Entra tenant/client configuration, ignores the client identity header, rejects anonymous history access, and refuses startup with the development history-HMAC secret. Do not put a shared API token in frontend JavaScript.
+
+The prototype rate limiter is bounded and separates authenticated user/IP keys. Proxy headers are ignored unless `TRUST_PROXY_HEADERS=true`. It is process-local and is not reliable across multiple Uvicorn workers or service instances; production scaling should use a shared implementation such as Redis behind the same limiter interface. Enforce the request-body limit at Render or any other reverse proxy as well as in FastAPI.
+
 ## Model training
 
 `backend/data/training_dataset.csv` is the only training input. It contains `label` and `text` columns and combines the curated university examples with the final labeled phishing/legitimate corpus.
@@ -123,6 +127,8 @@ Rules cover:
 
 URL analysis is heuristic and does not confirm whether a domain is currently listed as malicious. UniPhishGuard does not send URLs or email content to an external reputation provider.
 
+Authentication results are accepted only from configured trusted `authserv-id` values. Missing results are treated as unavailable, and untrusted `Authentication-Results` headers are not accepted as proof of SPF, DKIM, or DMARC. Header availability and forwarding/ARC behavior vary by Outlook and Exchange configuration, so these checks remain supporting evidence rather than definitive authentication.
+
 Weights and category caps are configured in `backend/app/settings.json`. High-impact rule evidence can outweigh the statistical model, while per-category caps prevent repeated similar indicators from dominating the score.
 
 ## Privacy and security
@@ -130,6 +136,16 @@ Weights and category caps are configured in `backend/app/settings.json`. High-im
 SQLite stores a redacted subject, pseudonymized sender, score, verdict, and scan time. It does not store the full body, headers, attachment contents, or raw sender address. History is scoped by user and trimmed by age and count.
 
 Email content still crosses the network between the add-in and API. Production deployments must use HTTPS, restrictive CORS, authentication, rate limits, protected logs, and an approved retention policy.
+
+The **Report to IT** action opens a draft and never sends automatically or adds the message to training. A safe future feedback workflow is: collect limited feedback, remove sensitive data, have an administrator verify the label, add only approved examples to a controlled dataset, retrain offline, compare against the previous model, and deploy only after validation.
+
+## Future work
+
+- Curate and license representative Arabic phishing samples.
+- Evaluate Arabic and mixed Arabic-English messages separately.
+- Add reviewed Arabic university-branding and social-engineering terms.
+- Validate on an independently sourced university-email dataset.
+- Consider an optional reputation-provider interface only after privacy and data-sharing review; no provider is enabled now.
 
 ## Testing
 
