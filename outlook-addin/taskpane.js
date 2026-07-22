@@ -14,26 +14,6 @@ const fallbackApis = window.location.port === "8000" ? [] : ["https://127.0.0.1:
 const API_BASE_URLS = [devApi || configuredApi, ...fallbackApis].filter(Boolean);
 const API_TOKEN = window.UNIPHISHGUARD_API_TOKEN || "";
 
-let finishOfficeReady;
-let officeReadyFinished = false;
-window.uniphishguardOfficeReady = new Promise((resolve) => {
-  finishOfficeReady = (info) => {
-    if (!officeReadyFinished) {
-      officeReadyFinished = true;
-      resolve(info || {});
-    }
-  };
-});
-
-if (!window.Office) {
-  finishOfficeReady({ host: "browser" });
-} else {
-  Office.initialize = () => finishOfficeReady({ host: "outlook", source: "initialize" });
-  if (typeof Office.onReady === "function") {
-    Office.onReady((info) => finishOfficeReady(info)).catch(() => {});
-  }
-}
-
 // -----------------------------------------------------------------------------
 // UI initialization
 // -----------------------------------------------------------------------------
