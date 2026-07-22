@@ -31,11 +31,11 @@ let buttonsBound = false;
 bindButtons();
 
 if (window.Office && Office.onReady) {
-  Office.onReady((info) => {
-    window.uniphishguardFinishOfficeReady?.(info);
+  Office.onReady(() => {
     bindButtons();
   });
 } else {
+  bindButtons();
   runtimeNoteEl.hidden = false;
   runtimeNoteEl.textContent = useSampleEmail
     ? "Browser preview is using sample email data."

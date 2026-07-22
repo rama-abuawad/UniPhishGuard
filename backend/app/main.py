@@ -105,11 +105,6 @@ async def limit_request_size(request: Request, call_next):
     if request.url.path.startswith("/addin/"):
         response.headers["Cache-Control"] = "no-store, no-cache, must-revalidate, max-age=0"
         response.headers["Pragma"] = "no-cache"
-        response.headers["Content-Security-Policy"] = (
-            "default-src 'self'; script-src 'self' https://appsforoffice.microsoft.com; "
-            "style-src 'self' 'unsafe-inline'; img-src 'self' data:; "
-            "connect-src 'self' https:; frame-ancestors *"
-        )
     else:
         response.headers["Content-Security-Policy"] = "default-src 'none'; frame-ancestors 'none'"
     return response
