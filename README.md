@@ -100,7 +100,7 @@ Rules cover:
 
 - sender and Reply-To mismatch;
 - SPF, DKIM, DMARC, alignment, forwarding, and unavailable headers;
-- misleading link text, IP-address URLs, punycode, shorteners, encoded URLs, unusual ports, and optional reputation checks;
+- misleading link text, IP-address URLs, punycode, shorteners, encoded URLs, and unusual ports;
 - dangerous, double-extension, macro-enabled, MIME-mismatched, and archive attachments;
 - QR-code links and archive contents within bounded processing limits;
 - university-domain lookalikes and fake campus services.
@@ -111,7 +111,7 @@ Weights and category caps are configured in `backend/app/settings.json`. High-im
 
 SQLite stores a redacted subject, pseudonymized sender, score, verdict, and scan time. It does not store the full body, headers, attachment contents, or raw sender address. History is scoped by user and trimmed by age and count.
 
-Email content still crosses the network between the add-in and API. Production deployments must use HTTPS, restrictive CORS, authentication, rate limits, protected logs, and an approved retention policy. URL reputation is optional because it sends URLs to an external provider when configured.
+Email content still crosses the network between the add-in and API. Production deployments must use HTTPS, restrictive CORS, authentication, rate limits, protected logs, and an approved retention policy.
 
 ## Testing
 

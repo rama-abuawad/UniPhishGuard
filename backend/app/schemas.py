@@ -72,8 +72,6 @@ class EmailAnalysisResponse(BaseModel):
     score_breakdown: list[ScoreComponent] = Field(default_factory=list)
     top_reasons: list[str] = Field(default_factory=list)
     url_count: int = 0
-    url_reputation_checked: int = 0
-    url_reputation_status: str = "not_configured"
     attachment_count: int = 0
     attachment_hashes: list[str] = Field(default_factory=list)
     decoded_qr_links: list[LinkInfo] = Field(default_factory=list)

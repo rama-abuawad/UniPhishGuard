@@ -307,16 +307,11 @@ function renderReport(report) {
   const threatLevel = normalizeThreatLevel(report);
   const verdictClass = threatLevelClassName(threatLevel.code, report.verdict);
   const threatColor = safeColor(threatLevel.color);
-  const reputationStatus = report.url_reputation_status === "checked"
-    ? `${report.url_reputation_checked || 0} URL(s) checked externally`
-    : report.url_reputation_status === "unavailable"
-      ? "external service unavailable"
-      : "";
   const importantIndicators = (report.indicators || []).filter((indicator) => ["high", "medium"].includes(indicator.severity));
   const checks = buildCheckStatuses(report);
   const reasons = buildResultReasons(report, checks);
   const reasonItems = renderSimpleList(reasons, "No strong phishing evidence was found.");
-  const technicalDetails = renderTechnicalDetails(report, importantIndicators, reputationStatus || "not enabled");
+  const technicalDetails = renderTechnicalDetails(report, importantIndicators);
   const resultSummary = report.risk_score < 25
     ? "No strong phishing evidence was found."
     : report.risk_score < 55
@@ -431,8 +426,8 @@ function buildCheckStatuses(report) {
     },
     {
       label: "Links",
-      value: hasImportantCode("url_", "link_", "approved_domain", "external_url") ? "Suspicious" : "Safe",
-      tone: hasImportantCode("url_", "link_", "approved_domain", "external_url") ? "warning" : "safe",
+      value: hasImportantCode("url_", "link_", "approved_domain") ? "Suspicious" : "Safe",
+      tone: hasImportantCode("url_", "link_", "approved_domain") ? "warning" : "safe",
     },
     {
       label: "Attachments",
@@ -461,7 +456,7 @@ function buildResultReasons(report, checks) {
   return reasons.slice(0, 3);
 }
 
-function renderTechnicalDetails(report, indicators, reputationStatus) {
+function renderTechnicalDetails(report, indicators) {
   indicators = indicators.filter((indicator) => indicator.code !== "ai_phishing_signal");
   const categories = report.risk_score >= 25 ? renderThreatCategories(report.threat_categories || []) : "";
   const indicatorItems = indicators.length
@@ -471,8 +466,6 @@ function renderTechnicalDetails(report, indicators, reputationStatus) {
   return `
     <details class="technical-details">
       <summary>Show technical details</summary>
-      <p class="detail-label">URL reputation</p>
-      <p class="meta">${escapeHtml(reputationStatus)}</p>
       ${categoryItems}
       ${indicatorItems}
     </details>
