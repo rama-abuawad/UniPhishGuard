@@ -24,6 +24,7 @@ const resultEl = document.getElementById("result");
 const statusEl = document.getElementById("connectionStatus");
 const runtimeNoteEl = document.getElementById("runtimeNote");
 let lastReport = null;
+let lastScannedEmail = null;
 let buttonsBound = false;
 
 bindButtons();
@@ -70,6 +71,7 @@ async function scanCurrentEmail() {
       throw makeHttpError(response.status);
     }
 
+    lastScannedEmail = email;
     renderReport(await response.json());
     statusEl.textContent = "Complete";
   } catch (error) {
@@ -355,7 +357,7 @@ function renderReport(report) {
 
       ${technicalDetails}
 
-      <button class="report-button" type="button" onclick="prepareItReport()">Copy IT Report</button>
+      <button class="report-button" type="button" onclick="openItReportDraft()">Report to IT</button>
     </article>
   `;
 }
@@ -472,43 +474,49 @@ function renderTechnicalDetails(report, indicators) {
   `;
 }
 
-async function prepareItReport() {
+function openItReportDraft() {
   if (!lastReport) {
     return;
   }
 
-  const existingReport = document.getElementById("itReport");
-  if (existingReport) {
-    existingReport.remove();
-  }
-
   const threatLevel = normalizeThreatLevel(lastReport);
   const reportText = buildReportText({ ...lastReport, threat_level: threatLevel });
-  const categoryLines = reportText.split("Threat categories:\n")[1].split("\nIndicators:")[0];
-  const indicatorLines = reportText.split("\nIndicators:\n")[1];
+  const originalDetails = lastScannedEmail
+    ? [
+        `Original subject: ${lastScannedEmail.subject || "(No subject)"}`,
+        `Original sender: ${lastScannedEmail.sender?.name || "Unknown"} <${lastScannedEmail.sender?.email || "unknown"}>`,
+      ].join("\n")
+    : "";
+  const body = [
+    "Hello IT Team,",
+    "",
+    "I would like to report an email for security review. UniPhishGuard produced the following scan summary:",
+    "",
+    originalDetails,
+    reportText,
+    "",
+    "Please investigate this message.",
+  ].join("\n");
 
-  let copied = false;
-  try {
-    await navigator.clipboard.writeText(reportText);
-    copied = true;
-  } catch (error) {
-    copied = false;
+  if (!Office.context?.mailbox?.displayNewMessageForm) {
+    renderReportActionStatus("Outlook could not open a message draft. Please use Outlook desktop or Outlook on the web.", true);
+    return;
   }
 
-  resultEl.insertAdjacentHTML("beforeend", `
-    <div id="itReport" class="it-report">
-      <p class="section-title">IT Report ${copied ? "Copied" : "Prepared"}</p>
-      <p class="meta">${copied ? "Paste this into the approved ADU IT reporting channel." : "Copy this summary into the approved ADU IT reporting channel."}</p>
-      <div class="report-summary">
-        <strong>Verdict:</strong> ${escapeHtml(lastReport.verdict)}<br>
-        <strong>Threat level:</strong> ${escapeHtml(threatLevel.label)}<br>
-        <strong>Risk score:</strong> ${lastReport.risk_score}/100<br>
-        <strong>AI confidence:</strong> ${Math.round(lastReport.ai_confidence * 100)}%<br>
-        <strong>Threat categories:</strong><br>${escapeHtml(categoryLines).replace(/\n/g, "<br>")}<br>
-        <strong>Indicators:</strong><br>${escapeHtml(indicatorLines).replace(/\n/g, "<br>")}
-      </div>
-    </div>
-  `);
+  Office.context.mailbox.displayNewMessageForm({
+    toRecipients: [],
+    subject: `Suspicious email report: ${lastScannedEmail?.subject || "Email for review"}`.slice(0, 255),
+    htmlBody: `<pre style="font-family:Segoe UI,Arial,sans-serif;white-space:pre-wrap">${escapeHtml(body)}</pre>`,
+  });
+  renderReportActionStatus("A report draft was opened. Add your IT recipient, review it, and press Send.");
+}
+
+function renderReportActionStatus(message, isError = false) {
+  document.getElementById("itReportStatus")?.remove();
+  resultEl.insertAdjacentHTML(
+    "beforeend",
+    `<p id="itReportStatus" class="meta${isError ? " error" : ""}">${escapeHtml(message)}</p>`,
+  );
 }
 
 // -----------------------------------------------------------------------------

@@ -10,6 +10,7 @@ UniPhishGuard is a hybrid AI phishing detector delivered as an Outlook task-pane
 4. Deterministic checks inspect sender identity, SPF/DKIM/DMARC results, URLs, attachments, QR links, and university impersonation.
 5. Capped score categories combine the model signal and rule evidence into a 0–100 risk score.
 6. SQLite retains a limited, redacted, per-user scan history. Full message bodies are not stored.
+7. The report action opens a new Outlook draft containing the scan summary; the user chooses the IT recipient and sends it manually.
 
 ```text
 Outlook + Office.js -> FastAPI -> ML model + rules -> risk report -> SQLite history
