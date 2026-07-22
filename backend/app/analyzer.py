@@ -6,6 +6,7 @@ import binascii
 import hashlib
 import io
 import json
+import os
 import zipfile
 from functools import lru_cache
 from pathlib import Path
@@ -13,17 +14,22 @@ from email.utils import parseaddr
 from html.parser import HTMLParser
 from html import unescape
 from ipaddress import ip_address
-from urllib.parse import unquote, urlparse
+from urllib.error import HTTPError, URLError
+from urllib.parse import unquote, urlencode, urlparse
+from urllib.request import Request, urlopen
 
 import cv2
 import numpy as np
 
 from .ai import explain_email_risk, predict_email_risk
 from .schemas import EmailAnalysisRequest, EmailAnalysisResponse, Indicator, LinkInfo, ScoreComponent, ThreatCategory, ThreatLevel
-from .url_reputation import check_url_reputation
 
 
 SETTINGS_PATH = Path(__file__).with_name("settings.json")
+WEB_RISK_ENDPOINT = "https://webrisk.googleapis.com/v1/uris:search"
+WEB_RISK_THREAT_TYPES = ("MALWARE", "SOCIAL_ENGINEERING", "UNWANTED_SOFTWARE")
+MAX_REPUTATION_URLS = int(os.getenv("URL_REPUTATION_MAX_URLS", "20"))
+REPUTATION_TIMEOUT_SECONDS = float(os.getenv("URL_REPUTATION_TIMEOUT_SECONDS", "3"))
 
 
 @lru_cache
@@ -37,6 +43,46 @@ def organization_config() -> dict:
 
 def scoring_config() -> dict:
     return _settings()["scoring"]
+
+
+def check_url_reputation(urls: set[str]) -> tuple[list[Indicator], int, str]:
+    """Check URLs with Google Web Risk when a server-side key is configured."""
+    api_key = os.getenv("GOOGLE_WEB_RISK_API_KEY", "").strip()
+    if not api_key:
+        return [], 0, "not_configured"
+
+    candidates = sorted({_valid_reputation_url(url) for url in urls if _valid_reputation_url(url)})[:MAX_REPUTATION_URLS]
+    indicators: list[Indicator] = []
+    checked = 0
+    for url in candidates:
+        try:
+            threat_types = [("threatTypes", threat_type) for threat_type in WEB_RISK_THREAT_TYPES]
+            query = urlencode([("uri", url), *threat_types, ("key", api_key)])
+            request = Request(f"{WEB_RISK_ENDPOINT}?{query}", headers={"Accept": "application/json"})
+            with urlopen(request, timeout=REPUTATION_TIMEOUT_SECONDS) as response:
+                payload = json.loads(response.read().decode("utf-8"))
+            checked += 1
+        except (HTTPError, URLError, TimeoutError, OSError, ValueError, json.JSONDecodeError):
+            return indicators, checked, "unavailable"
+
+        matches = payload.get("threat", {}).get("threatTypes", [])
+        if matches:
+            host = urlparse(url).hostname or "URL"
+            readable = ", ".join(str(value).replace("_", " ").lower() for value in matches)
+            indicators.append(Indicator(
+                code="external_url_reputation_match",
+                severity="high",
+                message=f"External reputation service flags {host} for {readable}.",
+            ))
+    return indicators, checked, "checked"
+
+
+def _valid_reputation_url(value: str) -> str | None:
+    value = value.strip()
+    parsed = urlparse(value)
+    if parsed.scheme.lower() not in {"http", "https"} or not parsed.hostname:
+        return None
+    return value
 
 
 URL_RE = re.compile(r"https?://[^\s<>\"]+", re.IGNORECASE)
