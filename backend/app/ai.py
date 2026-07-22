@@ -1,5 +1,7 @@
 from pathlib import Path
+import hashlib
 import json
+import logging
 import os
 
 import joblib
@@ -9,8 +11,10 @@ from .schemas import EmailAnalysisRequest
 
 MODEL_PATH = Path(__file__).with_name("email_model.joblib")
 METRICS_PATH = Path(__file__).with_name("model_metrics.json")
+INTEGRITY_PATH = Path(__file__).with_name("model_integrity.json")
 MAX_MODEL_TEXT = 80_000
 _MODEL = None
+LOGGER = logging.getLogger(__name__)
 SUSPICIOUS_PHRASES = (
     "verify your account",
     "urgent action",
@@ -34,6 +38,7 @@ def _load_model():
             raise FileNotFoundError(
                     "Email AI model is missing. Run 'python train_model.py' in the backend folder."
             )
+        _verify_model_integrity()
         _check_model_metadata()
         _MODEL = joblib.load(MODEL_PATH)
     return _MODEL
@@ -87,10 +92,43 @@ def _check_model_metadata() -> None:
         return
 
     trained_version = metadata.get("runtime", {}).get("scikit_learn")
-    if trained_version and trained_version != sklearn.__version__ and os.getenv("STRICT_MODEL_VERSION") == "true":
+    app_env = os.getenv("APP_ENV", "development").lower()
+    strict = app_env == "production" or os.getenv("STRICT_MODEL_VERSION", "false").lower() == "true"
+    override = os.getenv("ALLOW_MODEL_VERSION_MISMATCH", "false").lower() == "true"
+    if trained_version and trained_version != sklearn.__version__ and strict and not override:
         raise RuntimeError(
             f"Model was trained with scikit-learn {trained_version}, but runtime is {sklearn.__version__}."
         )
+    if trained_version and trained_version != sklearn.__version__:
+        LOGGER.warning("Model/runtime scikit-learn versions differ: trained=%s runtime=%s", trained_version, sklearn.__version__)
+
+
+def _sha256(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as file:
+        for chunk in iter(lambda: file.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def _verify_model_integrity() -> None:
+    allow_override = (
+        os.getenv("APP_ENV", "development").lower() == "development"
+        and os.getenv("ALLOW_UNVERIFIED_MODEL", "false").lower() == "true"
+    )
+    try:
+        integrity = json.loads(INTEGRITY_PATH.read_text(encoding="utf-8"))
+        expected = integrity["email_model.joblib"]
+    except (OSError, KeyError, json.JSONDecodeError) as error:
+        if allow_override:
+            LOGGER.warning("Model integrity data is missing; development override is active.")
+            return
+        LOGGER.error("Model integrity verification failed: integrity data is missing or invalid.")
+        raise RuntimeError("Model integrity data is missing or invalid.") from error
+    actual = _sha256(MODEL_PATH)
+    if actual != expected:
+        LOGGER.error("Model integrity verification failed: checksum mismatch.")
+        raise RuntimeError("Model checksum does not match the trusted training artifact.")
 
 
 def _model_threshold() -> float:

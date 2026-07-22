@@ -93,6 +93,17 @@ python train_model.py
 
 Training performs exact-text deduplication, stratified train/validation/test splitting, word and character TF-IDF feature extraction, calibrated Logistic Regression, and validation-set threshold selection. It writes `app/email_model.joblib` and `app/model_metrics.json`.
 
+Splits are group-aware: normalized template fingerprints keep related messages in one partition. Threshold selection targets at least 95% phishing recall by default and then minimizes false positives. Training also writes `app/model_integrity.json` with SHA-256 checksums for the model, metrics, and dataset. Joblib artifacts use pickle-based deserialization and must come only from the trusted offline training process.
+
+Evaluate a completely separate labelled CSV without retraining or merging it into training:
+
+```powershell
+cd backend
+python evaluate_external.py path\to\external.csv --output external_evaluation_metrics.json
+```
+
+The external CSV must contain `label` and `text`. No third-party dataset is downloaded automatically and no external result is claimed until such a dataset is supplied.
+
 The model is an English-focused baseline. Treat its probability as one signal, not proof that a message is malicious. Dataset provenance, licensing, language coverage, class balance, false-positive rate, and false-negative rate should be reviewed before production use.
 
 The complete provenance and limitations record is in [`backend/data/DATASET_CARD.md`](backend/data/DATASET_CARD.md). The consolidated file contains 11,000 records: repository history identifies 1,000 as locally template-generated, while the source and licence for the other 10,000 cannot currently be verified. **Source or licence requires verification before public redistribution.**
