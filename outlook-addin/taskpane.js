@@ -31,7 +31,8 @@ let buttonsBound = false;
 bindButtons();
 
 if (window.Office && Office.onReady) {
-  Office.onReady(() => {
+  Office.onReady((info) => {
+    window.uniphishguardFinishOfficeReady?.(info);
     bindButtons();
   });
 } else {

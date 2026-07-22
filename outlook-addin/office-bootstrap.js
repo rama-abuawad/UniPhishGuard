@@ -1,5 +1,5 @@
-// Register immediately after Office.js loads. Classic Outlook can initialize
-// before the task-pane application script at the end of the page is available.
+// Register before Office.js loads. Classic Outlook can fire Office.initialize
+// while the hosted library is loading, before later page scripts execute.
 window.uniphishguardOfficeReady = new Promise((resolve) => {
   let finished = false;
   const finish = (info) => {
@@ -10,12 +10,6 @@ window.uniphishguardOfficeReady = new Promise((resolve) => {
   };
 
   window.uniphishguardFinishOfficeReady = finish;
-  if (!window.Office) {
-    finish({ host: "browser" });
-  } else {
-    Office.initialize = () => finish({ host: "outlook", source: "initialize" });
-    if (typeof Office.onReady === "function") {
-      Office.onReady((info) => finish(info)).catch(() => {});
-    }
-  }
+  window.Office = window.Office || {};
+  window.Office.initialize = () => finish({ host: "outlook", source: "initialize" });
 });
