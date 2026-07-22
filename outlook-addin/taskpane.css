@@ -299,40 +299,15 @@ h1 {
   margin: 6px 0 0;
 }
 
-.check-grid {
-  display: grid;
-  gap: 7px;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-}
-
-.check-item {
-  background: #f7f9fc;
-  border: 1px solid #d9e1ec;
-  border-radius: 8px;
-  display: grid;
-  gap: 4px;
-  padding: 8px 9px;
-}
-
-.check-item span {
-  color: #637083;
-  font-size: 11px;
-}
-
-.check-item strong {
+.ai-result {
+  background: #f4f7fb;
+  border-left: 4px solid #4477b2;
+  border-radius: 6px;
+  color: #344257;
   font-size: 13px;
-}
-
-.check-item.safe strong {
-  color: #1f7048;
-}
-
-.check-item.warning strong {
-  color: #a54816;
-}
-
-.check-item.neutral strong {
-  color: #637083;
+  line-height: 1.4;
+  margin: 12px 0;
+  padding: 9px 10px;
 }
 
 .technical-details {

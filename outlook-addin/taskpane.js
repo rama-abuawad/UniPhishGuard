@@ -314,9 +314,12 @@ function renderReport(report) {
       : "";
   const importantIndicators = (report.indicators || []).filter((indicator) => ["high", "medium"].includes(indicator.severity));
   const checks = buildCheckStatuses(report);
+  const aiTextConcern = (report.indicators || []).some((indicator) => indicator.code === "ai_phishing_signal");
+  const aiTextResult = aiTextConcern
+    ? "Concerning phishing-like wording found."
+    : "No strong phishing-like wording found.";
   const reasons = buildResultReasons(report, checks);
   const reasonItems = renderSimpleList(reasons, "No strong phishing evidence was found.");
-  const checkGrid = renderCheckStatuses(checks);
   const technicalDetails = renderTechnicalDetails(report, importantIndicators, reputationStatus || "not enabled");
   const resultSummary = report.risk_score < 25
     ? "No strong phishing evidence was found."
@@ -353,8 +356,7 @@ function renderReport(report) {
         </div>
       </div>
 
-      <p class="section-title">Email checks</p>
-      <div class="check-grid">${checkGrid}</div>
+      <p class="ai-result"><strong>AI text detection:</strong> ${escapeHtml(aiTextResult)}</p>
 
       <p class="section-title">Why this result</p>
       <ul class="list">${reasonItems}</ul>
@@ -449,15 +451,6 @@ function buildCheckStatuses(report) {
       tone: hasCode("ai_phishing_signal") ? "warning" : "safe",
     },
   ];
-}
-
-function renderCheckStatuses(checks) {
-  return checks.map((check) => `
-    <div class="check-item ${escapeHtml(check.tone)}">
-      <span>${escapeHtml(check.label)}</span>
-      <strong>${escapeHtml(check.value)}</strong>
-    </div>
-  `).join("");
 }
 
 function buildResultReasons(report, checks) {
