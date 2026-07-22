@@ -5,29 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>UniPhishGuard</title>
   <script src="https://appsforoffice.microsoft.com/lib/1/hosted/office.js"></script>
-  <script>
-    // Register immediately so classic Outlook does not fire Office.initialize
-    // before the task-pane application script has loaded.
-    window.uniphishguardOfficeReady = new Promise((resolve) => {
-      let finished = false;
-      const finish = (info) => {
-        if (!finished) {
-          finished = true;
-          resolve(info || {});
-        }
-      };
-
-      window.uniphishguardFinishOfficeReady = finish;
-      if (!window.Office) {
-        finish({ host: "browser" });
-      } else {
-        Office.initialize = () => finish({ host: "outlook", source: "initialize" });
-        if (typeof Office.onReady === "function") {
-          Office.onReady((info) => finish(info)).catch(() => {});
-        }
-      }
-    });
-  </script>
+  <script src="./office-bootstrap.js?v=1.0.8"></script>
   <link rel="stylesheet" href="./taskpane.css">
 </head>
 <body>
@@ -52,7 +30,7 @@
     <p id="runtimeNote" class="runtime-note" hidden></p>
     <p class="runtime-note">This tool estimates phishing risk. A low-risk result does not guarantee that an email is safe.</p>
   </main>
-  <script src="./taskpane-utils.js?v=1.0.7"></script>
-  <script src="./taskpane.js?v=1.0.7"></script>
+  <script src="./taskpane-utils.js?v=1.0.8"></script>
+  <script src="./taskpane.js?v=1.0.8"></script>
 </body>
 </html>
