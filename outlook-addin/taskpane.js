@@ -1,13 +1,42 @@
+// -----------------------------------------------------------------------------
+// Configuration and Office bootstrap
+// -----------------------------------------------------------------------------
+
 const params = new URLSearchParams(window.location.search);
-const configuredApi = window.UNIPHISHGUARD_API_BASE_URL || "https://localhost:8000";
+const configuredApi = window.location.port === "8000"
+  ? window.location.origin
+  : "https://localhost:8000";
 const devApi = window.UNIPHISHGUARD_ALLOW_API_OVERRIDE && params.get("api")
   ? params.get("api").replace(/\/analyze-email\/?$/, "")
   : null;
 const useSampleEmail = params.get("sample") === "1";
-const fallbackApis = window.UNIPHISHGUARD_API_FALLBACK_URLS || [];
+const fallbackApis = window.location.port === "8000" ? [] : ["https://127.0.0.1:8000"];
 const API_BASE_URLS = [devApi || configuredApi, ...fallbackApis].filter(Boolean);
 const API_TOKEN = window.UNIPHISHGUARD_API_TOKEN || "";
-const helpers = window.UniPhishGuardHelpers;
+
+let finishOfficeReady;
+let officeReadyFinished = false;
+window.uniphishguardOfficeReady = new Promise((resolve) => {
+  finishOfficeReady = (info) => {
+    if (!officeReadyFinished) {
+      officeReadyFinished = true;
+      resolve(info || {});
+    }
+  };
+});
+
+if (!window.Office) {
+  finishOfficeReady({ host: "browser" });
+} else {
+  Office.initialize = () => finishOfficeReady({ host: "outlook", source: "initialize" });
+  if (typeof Office.onReady === "function") {
+    Office.onReady((info) => finishOfficeReady(info)).catch(() => {});
+  }
+}
+
+// -----------------------------------------------------------------------------
+// UI initialization
+// -----------------------------------------------------------------------------
 
 const scanButton = document.getElementById("scanButton");
 const historyButton = document.getElementById("historyButton");
@@ -40,6 +69,10 @@ function bindButtons() {
     buttonsBound = true;
   }
 }
+
+// -----------------------------------------------------------------------------
+// Backend API
+// -----------------------------------------------------------------------------
 
 async function scanCurrentEmail() {
   setLoading(true);
@@ -108,6 +141,10 @@ async function findBackend() {
 
   throw new Error(`Backend is not reachable. Start it with run_https.cmd and open https://localhost:8000/health. Tried: ${errors.join("; ")}`);
 }
+
+// -----------------------------------------------------------------------------
+// Outlook message collection
+// -----------------------------------------------------------------------------
 
 async function getCurrentEmail() {
   await waitForOfficeHost();
@@ -241,7 +278,34 @@ function getInternetHeaders(item) {
 }
 
 function extractLinks(html, text) {
-  return helpers.extractLinks(html, text);
+  const links = [];
+  if (html && window.DOMParser) {
+    const doc = new DOMParser().parseFromString(html, "text/html");
+    doc.querySelectorAll("a[href]").forEach((anchor) => {
+      links.push({
+        text: (anchor.textContent || "").trim().slice(0, 500),
+        href: anchor.href || anchor.getAttribute("href"),
+      });
+    });
+  }
+
+  const urlRegex = /https?:\/\/[^\s<>"']+/gi;
+  for (const match of String(text || "").matchAll(urlRegex)) {
+    links.push({ text: match[0], href: match[0] });
+  }
+
+  const seen = new Set();
+  return links
+    .filter((link) => link.href && /^https?:\/\//i.test(link.href))
+    .filter((link) => {
+      const key = link.href.trim();
+      if (seen.has(key)) {
+        return false;
+      }
+      seen.add(key);
+      return true;
+    })
+    .slice(0, 100);
 }
 
 function getReplyTo(item) {
@@ -253,6 +317,10 @@ function getReplyTo(item) {
 
   return "";
 }
+
+// -----------------------------------------------------------------------------
+// Report and history rendering
+// -----------------------------------------------------------------------------
 
 function renderReport(report) {
   lastReport = report;
@@ -383,7 +451,7 @@ function renderThreatCategories(categories) {
   return categories.map((category) => `
     <div class="category-chip">
       <strong>${escapeHtml(category.label)}</strong>
-      <span>${escapeHtml(helpers.categoryEvidence(category))} evidence</span>
+      <span>${escapeHtml(categoryEvidence(category))} evidence</span>
       <small>${escapeHtml(category.reason)}</small>
     </div>
   `).join("");
@@ -478,7 +546,7 @@ async function prepareItReport() {
   }
 
   const threatLevel = normalizeThreatLevel(lastReport);
-  const reportText = helpers.buildReportText({ ...lastReport, threat_level: threatLevel });
+  const reportText = buildReportText({ ...lastReport, threat_level: threatLevel });
   const categoryLines = reportText.split("Threat categories:\n")[1].split("\nIndicators:")[0];
   const indicatorLines = reportText.split("\nIndicators:\n")[1];
 
@@ -505,6 +573,10 @@ async function prepareItReport() {
     </div>
   `);
 }
+
+// -----------------------------------------------------------------------------
+// Authentication, errors, and shared utilities
+// -----------------------------------------------------------------------------
 
 function setLoading(isLoading) {
   scanButton.disabled = isLoading;
@@ -564,7 +636,63 @@ function makeHttpError(status) {
 }
 
 function classifyError(error) {
-  return helpers.classifyError(error);
+  if (error.status === 401 || error.status === 403) {
+    return { title: "Authentication needed.", message: "Sign in or check the configured API token before scanning again.", code: `AUTH_${error.status}` };
+  }
+  if (error.status === 413 || error.status === 422) {
+    return { title: "Email is too large to scan.", message: "Try a smaller message or remove very large metadata before scanning.", code: `INPUT_${error.status}` };
+  }
+  if (error.status === 429) {
+    return { title: "Too many scans.", message: "Wait a minute and try again.", code: "RATE_LIMIT" };
+  }
+  if (/certificate|ssl|tls/i.test(error.message || "")) {
+    return { title: "Certificate problem.", message: "Open the backend health URL and accept the local certificate, then scan again.", code: "CERTIFICATE" };
+  }
+  if (/not reachable|failed to fetch|network/i.test(error.message || "")) {
+    return { title: "Backend offline.", message: `Start the backend and check https://localhost:8000/health. ${error.message || ""}`.trim(), code: "BACKEND_OFFLINE" };
+  }
+  return { title: "Scan failed.", message: error.message || "Check that the FastAPI backend is running over HTTPS.", code: "SCAN_ERROR" };
+}
+
+function categoryEvidence(category) {
+  return category.evidence_strength || category.confidence || "medium";
+}
+
+function buildReportText(report) {
+  const threatLevel = report.threat_level || { label: "Unknown" };
+  const categories = (report.threat_categories || []).length
+    ? report.threat_categories.map((category) => `- ${category.label} (${categoryEvidence(category)} evidence)`).join("\n")
+    : "- No specific category detected";
+  const indicators = (report.indicators || []).length
+    ? report.indicators.map((indicator) => `- ${String(indicator.severity || "").toUpperCase()}: ${indicator.message}`).join("\n")
+    : "- No major indicators found";
+  const breakdown = (report.score_breakdown || []).length
+    ? report.score_breakdown.map((item) => `- ${item.label}: ${item.score}/${item.cap}`).join("\n")
+    : "- No score components added";
+  const aiEvidence = (report.ai_evidence || []).length
+    ? report.ai_evidence.map((phrase) => `- ${phrase}`).join("\n")
+    : "- No specific suspicious language found";
+  const hashes = (report.attachment_hashes || []).length
+    ? report.attachment_hashes.map((value) => `- ${value}`).join("\n")
+    : "- No attachment content hash available";
+  const qrLinks = (report.decoded_qr_links || []).length
+    ? report.decoded_qr_links.map((link) => `- ${link.href}`).join("\n")
+    : "- No QR link found";
+
+  return [
+    "UniPhishGuard report",
+    `Verdict: ${report.verdict}`,
+    `Threat level: ${threatLevel.label}`,
+    `Risk score: ${report.risk_score}/100`,
+    `AI phishing probability: ${Math.round((report.ai_confidence || 0) * 100)}%`,
+    `URL reputation: ${report.url_reputation_status || "not_configured"} (${report.url_reputation_checked || 0} checked)`,
+    "Score breakdown:", breakdown,
+    "AI language evidence:", aiEvidence,
+    "Attachment hashes:", hashes,
+    "Decoded QR links:", qrLinks,
+    "Threat categories:", categories,
+    "Indicators:", indicators,
+  ].join("\n");
 }
 
 function escapeHtml(value) {

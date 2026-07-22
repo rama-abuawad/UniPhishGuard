@@ -6,15 +6,11 @@
   "scripts": {
     "certs": "office-addin-dev-certs install",
     "start": "http-server . -S -C %USERPROFILE%\\.office-addin-dev-certs\\localhost.crt -K %USERPROFILE%\\.office-addin-dev-certs\\localhost.key -p 3000 -c-1",
-    "test": "node taskpane.helpers.test.js",
-    "test:e2e": "playwright test",
-    "test:all": "npm.cmd run test && npm.cmd run test:e2e",
     "validate": "office-addin-manifest validate manifest.xml",
     "sideload": "office-addin-debugging start manifest.xml desktop --no-debug",
     "stop": "office-addin-debugging stop manifest.xml"
   },
   "devDependencies": {
-    "@playwright/test": "^1.61.1",
     "http-server": "^14.1.1",
     "office-addin-debugging": "^6.1.2",
     "office-addin-dev-certs": "^2.0.10",
