@@ -313,11 +313,16 @@ function renderReport(report) {
       ? "external service unavailable"
       : "";
   const importantIndicators = (report.indicators || []).filter((indicator) => ["high", "medium"].includes(indicator.severity));
-  const categories = report.risk_score >= 25 ? renderThreatCategories(report.threat_categories || []) : "";
-  const topReasons = renderSimpleList(report.top_reasons || [], "");
-  const categorySection = categories ? `<p class="section-title">Threat Category</p><div class="category-list">${categories}</div>` : "";
-  const reasonSection = (report.top_reasons || []).length ? `<p class="section-title">Why it was flagged</p><ul class="list">${topReasons}</ul>` : "";
-  const reputationLine = reputationStatus ? `<p class="meta">URL reputation: ${escapeHtml(reputationStatus)}</p>` : "";
+  const checks = buildCheckStatuses(report);
+  const reasons = buildResultReasons(report, checks);
+  const reasonItems = renderSimpleList(reasons, "No strong phishing evidence was found.");
+  const checkGrid = renderCheckStatuses(checks);
+  const technicalDetails = renderTechnicalDetails(report, importantIndicators, reputationStatus || "not enabled");
+  const resultSummary = report.risk_score < 25
+    ? "No strong phishing evidence was found."
+    : report.risk_score < 55
+      ? "Some evidence needs verification before you interact with this email."
+      : "Multiple strong phishing signals were found.";
 
   const actions = report.recommended_actions
     .map((action) => `<li>${escapeHtml(action)}</li>`)
@@ -333,7 +338,7 @@ function renderReport(report) {
           </span>
           <h2>${escapeHtml(report.verdict)}</h2>
           <p class="meta">Scan #${escapeHtml(report.scan_id || "-")} ${escapeHtml(report.scanned_at || "")}</p>
-          ${reputationLine}
+          <p class="result-summary">${escapeHtml(resultSummary)}</p>
         </div>
         <div class="score">${report.risk_score}</div>
       </div>
@@ -348,26 +353,16 @@ function renderReport(report) {
         </div>
       </div>
 
-      <div class="summary-grid">
-        <div class="summary-item">
-          <span class="summary-label">Links Found</span>
-          <span class="summary-value">${report.url_count}</span>
-        </div>
-        <div class="summary-item">
-          <span class="summary-label">Attachments</span>
-          <span class="summary-value">${report.attachment_count}</span>
-        </div>
-        <div class="summary-item">
-          <span class="summary-label">Risk Indicators</span>
-          <span class="summary-value">${importantIndicators.length}</span>
-        </div>
-      </div>
+      <p class="section-title">Email checks</p>
+      <div class="check-grid">${checkGrid}</div>
 
-      ${categorySection}
-      ${reasonSection}
+      <p class="section-title">Why this result</p>
+      <ul class="list">${reasonItems}</ul>
 
       <p class="section-title">What Should You Do?</p>
       <ul class="list">${actions}</ul>
+
+      ${technicalDetails}
 
       <button class="report-button" type="button" onclick="prepareItReport()">Copy IT Report</button>
     </article>
@@ -422,6 +417,76 @@ function renderError(error) {
       ${escapeHtml(detail.message)}
       <p class="meta">Code: ${escapeHtml(detail.code)}</p>
     </div>
+  `;
+}
+
+function buildCheckStatuses(report) {
+  const indicators = report.indicators || [];
+  const hasCode = (...prefixes) => indicators.some((indicator) => prefixes.some((prefix) => indicator.code.startsWith(prefix)));
+  const hasImportantCode = (...prefixes) => indicators.some((indicator) =>
+    ["high", "medium"].includes(indicator.severity) && prefixes.some((prefix) => indicator.code.startsWith(prefix))
+  );
+
+  return [
+    {
+      label: "Sender authentication",
+      value: hasImportantCode("spf_", "dkim_", "dmarc_", "auth_") ? "Warning" : hasCode("auth_headers_not_checked", "auth_results_missing") ? "Not available" : "Passed",
+      tone: hasImportantCode("spf_", "dkim_", "dmarc_", "auth_") ? "warning" : hasCode("auth_headers_not_checked", "auth_results_missing") ? "neutral" : "safe",
+    },
+    {
+      label: "Links",
+      value: hasImportantCode("url_", "link_", "approved_domain", "external_url") ? "Suspicious" : "Safe",
+      tone: hasImportantCode("url_", "link_", "approved_domain", "external_url") ? "warning" : "safe",
+    },
+    {
+      label: "Attachments",
+      value: hasImportantCode("attachment", "double_extension", "dangerous_attachment", "macro_", "archive_", "zip_") ? "Suspicious" : "Safe",
+      tone: hasImportantCode("attachment", "double_extension", "dangerous_attachment", "macro_", "archive_", "zip_") ? "warning" : "safe",
+    },
+    {
+      label: "Email wording",
+      value: hasCode("ai_phishing_signal") ? "Concerning" : "Normal",
+      tone: hasCode("ai_phishing_signal") ? "warning" : "safe",
+    },
+  ];
+}
+
+function renderCheckStatuses(checks) {
+  return checks.map((check) => `
+    <div class="check-item ${escapeHtml(check.tone)}">
+      <span>${escapeHtml(check.label)}</span>
+      <strong>${escapeHtml(check.value)}</strong>
+    </div>
+  `).join("");
+}
+
+function buildResultReasons(report, checks) {
+  if ((report.top_reasons || []).length) {
+    return [...new Set(report.top_reasons)].slice(0, 3);
+  }
+
+  const reasons = [];
+  const authentication = checks.find((check) => check.label === "Sender authentication");
+  if (authentication?.value === "Passed") reasons.push("Sender authentication passed.");
+  if (checks.find((check) => check.label === "Links")?.value === "Safe") reasons.push("No deceptive or dangerous link pattern was found.");
+  if (checks.find((check) => check.label === "Attachments")?.value === "Safe") reasons.push("No dangerous attachment pattern was found.");
+  return reasons.slice(0, 3);
+}
+
+function renderTechnicalDetails(report, indicators, reputationStatus) {
+  const categories = report.risk_score >= 25 ? renderThreatCategories(report.threat_categories || []) : "";
+  const indicatorItems = indicators.length
+    ? `<p class="detail-label">Important indicators</p><ul class="list">${renderSimpleList(indicators.map((indicator) => indicator.message), "")}</ul>`
+    : "";
+  const categoryItems = categories ? `<p class="detail-label">Detected category</p><div class="category-list">${categories}</div>` : "";
+  return `
+    <details class="technical-details">
+      <summary>Show technical details</summary>
+      <p class="detail-label">URL reputation</p>
+      <p class="meta">${escapeHtml(reputationStatus)}</p>
+      ${categoryItems}
+      ${indicatorItems}
+    </details>
   `;
 }
 

@@ -292,6 +292,69 @@ h1 {
   gap: 8px;
 }
 
+.result-summary {
+  color: #344257;
+  font-size: 13px;
+  line-height: 1.45;
+  margin: 6px 0 0;
+}
+
+.check-grid {
+  display: grid;
+  gap: 7px;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.check-item {
+  background: #f7f9fc;
+  border: 1px solid #d9e1ec;
+  border-radius: 8px;
+  display: grid;
+  gap: 4px;
+  padding: 8px 9px;
+}
+
+.check-item span {
+  color: #637083;
+  font-size: 11px;
+}
+
+.check-item strong {
+  font-size: 13px;
+}
+
+.check-item.safe strong {
+  color: #1f7048;
+}
+
+.check-item.warning strong {
+  color: #a54816;
+}
+
+.check-item.neutral strong {
+  color: #637083;
+}
+
+.technical-details {
+  border-top: 1px solid #d9e1ec;
+  margin-top: 16px;
+  padding-top: 10px;
+}
+
+.technical-details summary {
+  color: #315f91;
+  cursor: pointer;
+  font-size: 13px;
+  font-weight: 800;
+}
+
+.detail-label {
+  color: #344257;
+  font-size: 12px;
+  font-weight: 800;
+  margin: 12px 0 5px;
+}
+
 .breakdown-list {
   display: grid;
   gap: 6px;
