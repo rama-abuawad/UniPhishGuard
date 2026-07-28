@@ -1,11 +1,29 @@
 # UniPhishGuard
 
-UniPhishGuard is a hybrid AI phishing detector delivered as an Outlook task-pane add-in. The add-in collects data from the opened message with Office.js, sends it to a FastAPI API, and presents a risk score with evidence and recommended actions.
+UniPhishGuard is an AI-powered, rule-based phishing detection Outlook add-in designed for university students and staff. It analyzes email content, sender details, authentication results, links, attachments, and QR codes to estimate phishing risk. Users receive a clear risk score, an explanation of the warning signs found, and recommended actions to help them decide whether an email should be trusted or reported to IT.
+
+UniPhishGuard uses two understandable detection methods together:
+
+- A trained text model looks for language patterns learned from labelled legitimate and phishing emails.
+- Security rules look for concrete warning signs such as a different Reply-To domain, failed DMARC authentication, misleading links, lookalike university domains, or dangerous attachments.
+
+Neither method makes the decision alone. Their evidence is combined into one result that supports the user and IT team when reviewing the message.
+
+## What happens when an email is scanned
+
+1. The Outlook add-in reads the currently opened email using Office.js.
+2. It sends the necessary message information to the local FastAPI backend.
+3. The text model estimates whether the email wording resembles known phishing or legitimate messages.
+4. Security rules inspect the sender, Reply-To address, SPF/DKIM/DMARC results, links, attachments, QR codes, and university impersonation signs.
+5. The backend combines the useful evidence into a risk score from 0 to 100.
+6. Outlook displays the result, reasons, and recommended actions.
+7. The user can open a prepared Outlook draft to report the email to IT. Nothing is sent automatically.
+8. SQLite keeps a small, privacy-aware scan history without storing full message bodies.
 
 ## How it works
 
 1. `outlook-addin/taskpane.js` reads the subject, sender, Reply-To, body, internet headers, links, and attachment metadata.
-2. FastAPI validates the request and sends it to the hybrid analyzer.
+2. FastAPI validates the request and sends it to the email analyzer.
 3. A TF-IDF pipeline with calibrated Logistic Regression estimates phishing probability.
 4. Deterministic checks inspect sender identity, SPF/DKIM/DMARC results, URLs, attachments, QR links, and university impersonation.
 5. Capped score categories combine the model signal and rule evidence into a 0–100 risk score.
@@ -23,20 +41,28 @@ backend/
   app/
     main.py                 FastAPI routes, authentication, CORS, and rate limits
     schemas.py              Pydantic API and persistence schemas
-    analyzer.py             Rule checks and hybrid risk scoring
+    analyzer.py             Email checks, scoring, and recommendations
     ai.py                   Model loading and prediction
+    config.py               Validated detection configuration
     db.py                   SQLite history storage and retention
+    html_text.py            Safe conversion of HTML email into visible text
+    rate_limit.py           Lightweight local request limiter
     settings.json           Organization trust and scoring configuration
     email_model.joblib      Trained model artifact
+    model_integrity.json    Trusted artifact checksums
     model_metrics.json      Evaluation metrics and selected threshold
-  data/training_dataset.csv Final training dataset
-  tests/test_analyzer.py    Backend tests
+  data/
+    training_dataset.csv    Consolidated training dataset
+    DATASET_CARD.md         Dataset provenance and limitations
+  tests/                    Backend security, model, API, and analyzer tests
   train_model.py            TF-IDF + Logistic Regression training
+  evaluate_external.py      Evaluation against a separate labelled dataset
 outlook-addin/
   manifest.xml              Outlook add-in manifest
   taskpane.html             Task-pane markup
   taskpane.css              Task-pane styles
   taskpane.js               Office.js, API, and UI logic
+  taskpane-utils.js         Pure formatting and reporting helpers
   assets/                   Required Outlook PNG icons
 ```
 
