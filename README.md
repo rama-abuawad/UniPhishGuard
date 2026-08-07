@@ -66,36 +66,59 @@ outlook-addin/
   assets/                   Required Outlook PNG icons
 ```
 
-## Local setup
+## Run the Outlook add-in locally
 
-Prerequisites: Python 3.11 or later, Node.js/npm, and Outlook with add-in sideloading enabled.
+Prerequisites: Python 3.11 or later, Node.js/npm, and classic Outlook for Windows with add-in sideloading available.
 
-```powershell
-cd backend
-python -m venv .venv
-.\.venv\Scripts\Activate.ps1
-pip install -r requirements-dev.txt
-uvicorn app.main:app --reload --port 8000
-```
+The current manifest loads both the task pane and API from `https://localhost:8000`. FastAPI serves the files in `outlook-addin/` under `/addin`, so `npm run start` is not needed.
 
-In another terminal:
+### First-time setup
 
-```powershell
-cd outlook-addin
+Use **Command Prompt (CMD)** and install the local HTTPS certificate first:
+
+```bat
+cd /d C:\Users\rama\UniPhishGuard\outlook-addin
 npm install
 npm run certs
-npm run start
+npm run validate
 ```
 
-Validate and sideload the add-in:
+Accept the certificate trust prompt if Windows displays one. Then install the Python dependencies:
 
-```powershell
-cd outlook-addin
+```bat
+cd /d C:\Users\rama\UniPhishGuard\backend
+python -m pip install -r requirements-dev.txt
+```
+
+### Start UniPhishGuard
+
+Open the first Command Prompt window and start the HTTPS backend:
+
+```bat
+cd /d C:\Users\rama\UniPhishGuard\backend
+python -m uvicorn app.main:app --host localhost --port 8000 --ssl-certfile "%USERPROFILE%\.office-addin-dev-certs\localhost.crt" --ssl-keyfile "%USERPROFILE%\.office-addin-dev-certs\localhost.key"
+```
+
+Keep that window open. Confirm that the backend responds by opening `https://localhost:8000/health` in a browser. A JSON health response means the backend and certificate are working.
+
+Open a second Command Prompt window and sideload the manifest:
+
+```bat
+cd /d C:\Users\rama\UniPhishGuard\outlook-addin
 npm run validate
 npm run sideload
 ```
 
-The manifest requires HTTPS. Its local URLs point to the backend-hosted `/addin` static directory. For separate local hosting, update the manifest URLs to `https://localhost:3000`.
+Keep the backend running, open an email in classic Outlook, open **UniPhishGuard**, and select **Scan Email**.
+
+To stop the sideloaded debugging session later, run:
+
+```bat
+cd /d C:\Users\rama\UniPhishGuard\outlook-addin
+npm run stop
+```
+
+If startup reports that port 8000 is already in use, an older backend process is still running. Close its Command Prompt window before starting the backend again. Do not change the port unless the URLs in `outlook-addin/manifest.xml` are changed to match.
 
 ## API
 
