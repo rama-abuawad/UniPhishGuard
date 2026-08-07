@@ -74,37 +74,37 @@ The current manifest loads both the task pane and API from `https://localhost:80
 
 ### First-time setup
 
-Use **Command Prompt (CMD)** and install the local HTTPS certificate first:
+Open **Command Prompt (CMD)** in the cloned `UniPhishGuard` folder, then install the add-in dependencies and local HTTPS certificate:
 
 ```bat
-cd /d C:\Users\rama\UniPhishGuard\outlook-addin
+cd outlook-addin
 npm install
 npm run certs
 npm run validate
 ```
 
-Accept the certificate trust prompt if Windows displays one. Then install the Python dependencies:
+Accept the certificate trust prompt if Windows displays one. Return to the project folder and install the Python dependencies:
 
 ```bat
-cd /d C:\Users\rama\UniPhishGuard\backend
+cd ..\backend
 python -m pip install -r requirements-dev.txt
 ```
 
 ### Start UniPhishGuard
 
-Open the first Command Prompt window and start the HTTPS backend:
+Open a Command Prompt window in the `UniPhishGuard` folder and start the HTTPS backend:
 
 ```bat
-cd /d C:\Users\rama\UniPhishGuard\backend
+cd backend
 python -m uvicorn app.main:app --host localhost --port 8000 --ssl-certfile "%USERPROFILE%\.office-addin-dev-certs\localhost.crt" --ssl-keyfile "%USERPROFILE%\.office-addin-dev-certs\localhost.key"
 ```
 
 Keep that window open. Confirm that the backend responds by opening `https://localhost:8000/health` in a browser. A JSON health response means the backend and certificate are working.
 
-Open a second Command Prompt window and sideload the manifest:
+Open a second Command Prompt window in the `UniPhishGuard` folder and sideload the manifest:
 
 ```bat
-cd /d C:\Users\rama\UniPhishGuard\outlook-addin
+cd outlook-addin
 npm run validate
 npm run sideload
 ```
@@ -114,7 +114,7 @@ Keep the backend running, open an email in classic Outlook, open **UniPhishGuard
 To stop the sideloaded debugging session later, run:
 
 ```bat
-cd /d C:\Users\rama\UniPhishGuard\outlook-addin
+cd outlook-addin
 npm run stop
 ```
 
