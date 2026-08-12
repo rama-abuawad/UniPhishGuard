@@ -12,8 +12,12 @@ from .schemas import EmailAnalysisRequest, EmailAnalysisResponse, HistoryItem
 
 
 DB_PATH = Path(__file__).resolve().parents[1] / "data" / "uniphishguard.db"
-HISTORY_LIMIT = 50
-RETENTION_DAYS = 30
+HISTORY_LIMIT = int(os.getenv("HISTORY_ITEM_LIMIT", "50"))
+RETENTION_DAYS = int(os.getenv("HISTORY_RETENTION_DAYS", "30"))
+if HISTORY_LIMIT < 1 or HISTORY_LIMIT > 1000:
+    raise RuntimeError("HISTORY_ITEM_LIMIT must be between 1 and 1000.")
+if RETENTION_DAYS < 1 or RETENTION_DAYS > 3650:
+    raise RuntimeError("HISTORY_RETENTION_DAYS must be between 1 and 3650.")
 HMAC_SECRET = os.getenv("HISTORY_HMAC_SECRET", "local-dev-history-secret").encode("utf-8")
 
 
@@ -44,6 +48,15 @@ def init_db() -> None:
         conn.execute("CREATE INDEX IF NOT EXISTS idx_scans_user_id ON scans(user_id)")
         conn.execute("CREATE INDEX IF NOT EXISTS idx_scans_scanned_at ON scans(scanned_at)")
         _cleanup_old_scans(conn)
+
+
+def database_ready() -> bool:
+    try:
+        init_db()
+        with sqlite3.connect(DB_PATH) as conn:
+            return conn.execute("SELECT 1").fetchone() == (1,)
+    except sqlite3.Error:
+        return False
 
 
 def save_scan(email: EmailAnalysisRequest, result: EmailAnalysisResponse, user_id: str = "local") -> tuple[int, str]:

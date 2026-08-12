@@ -1,4 +1,6 @@
 from fastapi import HTTPException
+import asyncio
+import pytest
 
 from app import main
 
@@ -25,3 +27,30 @@ def test_invalid_token_is_rejected(monkeypatch):
     try: main.current_user(Request(), authorization="Bearer wrong")
     except HTTPException as error: assert error.status_code == 403
     else: raise AssertionError("Invalid token was accepted")
+
+
+def test_production_startup_fails_without_entra_configuration(monkeypatch):
+    monkeypatch.setattr(main, "APP_ENV", "production")
+    monkeypatch.setattr(main, "ENTRA_TENANT_ID", "")
+    monkeypatch.setattr(main, "ENTRA_CLIENT_ID", "")
+
+    async def start():
+        async with main.lifespan(main.app):
+            pass
+
+    with pytest.raises(RuntimeError, match="ENTRA_TENANT_ID"):
+        asyncio.run(start())
+
+
+def test_entra_token_without_identity_claim_is_rejected(monkeypatch):
+    class KeyClient:
+        def get_signing_key_from_jwt(self, token):
+            return type("SigningKey", (), {"key": "key"})()
+
+    monkeypatch.setattr(main, "ENTRA_TENANT_ID", "tenant")
+    monkeypatch.setattr(main, "ENTRA_CLIENT_ID", "client")
+    monkeypatch.setattr(main, "_JWK_CLIENT", KeyClient())
+    monkeypatch.setattr(main.jwt, "decode", lambda *args, **kwargs: {"tid": "tenant"})
+    with pytest.raises(HTTPException) as error:
+        main._validate_entra_token("token")
+    assert error.value.status_code == 403

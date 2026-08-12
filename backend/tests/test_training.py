@@ -1,4 +1,10 @@
-from train_model import assert_no_group_leakage, choose_threshold, dedupe_and_group, grouped_split
+from train_model import (
+    assert_no_group_leakage,
+    choose_threshold,
+    dedupe_and_group,
+    grouped_split,
+    split_dataset,
+)
 
 
 def _rows():
@@ -40,3 +46,23 @@ def test_threshold_policy_meets_recall_and_reduces_false_positives():
     selected = next(candidate for candidate in candidates if candidate["threshold"] == threshold)
     assert selected["recall"] >= 2 / 3
     assert selected["false_positive_rate"] == 0
+
+
+def test_declared_splits_are_preserved_without_group_leakage():
+    rows = []
+    for split in ("training", "validation", "testing"):
+        for label in ("legitimate", "phishing"):
+            rows.append({
+                "label": label,
+                "text": f"{split} {label} unique content for the declared split test",
+                "source": "test",
+                "template_id": f"{split}-{label}",
+                "is_synthetic": "false",
+                "split": split,
+            })
+    rows, _, _ = dedupe_and_group(rows)
+    training, validation, testing, strategy = split_dataset(rows)
+    assert strategy == "declared_source_and_time_aware"
+    assert {row["split"] for row in training} == {"training"}
+    assert {row["split"] for row in validation} == {"validation"}
+    assert {row["split"] for row in testing} == {"testing"}

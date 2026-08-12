@@ -1,3 +1,4 @@
+import argparse
 import csv
 import hashlib
 import json
@@ -13,7 +14,7 @@ import sklearn
 from sklearn.calibration import CalibratedClassifierCV
 from sklearn.feature_extraction.text import TfidfVectorizer
 from sklearn.linear_model import LogisticRegression
-from sklearn.metrics import average_precision_score, classification_report, confusion_matrix, roc_auc_score
+from sklearn.metrics import accuracy_score, average_precision_score, classification_report, confusion_matrix, roc_auc_score
 from sklearn.model_selection import StratifiedGroupKFold
 from sklearn.pipeline import FeatureUnion, Pipeline
 
@@ -80,6 +81,7 @@ def load_dataset(path: Path = DATASET_PATH) -> list[dict[str, str]]:
                 "source": (row.get("source") or "unknown").strip() or "unknown",
                 "template_id": (row.get("template_id") or "").strip(),
                 "is_synthetic": (row.get("is_synthetic") or "unknown").strip().lower() or "unknown",
+                "split": (row.get("split") or "").strip().lower(),
             })
     return rows
 
@@ -117,6 +119,26 @@ def grouped_split(rows: list[dict[str, str]]) -> tuple[list[dict[str, str]], lis
     return train, validation, test
 
 
+def split_dataset(rows: list[dict[str, str]]) -> tuple[list[dict[str, str]], list[dict[str, str]], list[dict[str, str]], str]:
+    declared = {row.get("split", "") for row in rows}
+    expected = {"training", "validation", "testing"}
+    if declared == expected:
+        training = [row for row in rows if row["split"] == "training"]
+        validation = [row for row in rows if row["split"] == "validation"]
+        testing = [row for row in rows if row["split"] == "testing"]
+        if not training or not validation or not testing:
+            raise ValueError("Every declared dataset split must contain records.")
+        for split_name, split in (("training", training), ("validation", validation), ("testing", testing)):
+            if {row["label"] for row in split} != {"legitimate", "phishing"}:
+                raise ValueError(f"The {split_name} split must contain both labels.")
+        assert_no_group_leakage(training, validation, testing)
+        return training, validation, testing, "declared_source_and_time_aware"
+    if declared != {""}:
+        raise ValueError("Dataset split values must be blank or exactly training/validation/testing.")
+    training, validation, testing = grouped_split(rows)
+    return training, validation, testing, "generated_stratified_group_split"
+
+
 def assert_no_group_leakage(*splits: list[dict[str, str]]) -> None:
     group_sets = [{row["group"] for row in split} for split in splits]
     for left in range(len(group_sets)):
@@ -126,14 +148,21 @@ def assert_no_group_leakage(*splits: list[dict[str, str]]) -> None:
                 raise ValueError(f"Group leakage detected across splits: {sorted(overlap)[:3]}")
 
 
-def build_model() -> Pipeline:
+def build_model(calibration_cv=3) -> Pipeline:
     return Pipeline([
         ("features", FeatureUnion([
-            ("word", TfidfVectorizer(ngram_range=(1, 2), stop_words="english")),
-            ("char", TfidfVectorizer(analyzer="char_wb", ngram_range=(3, 5))),
+            ("word", TfidfVectorizer(
+                ngram_range=(1, 2), stop_words="english", min_df=2, max_df=0.995,
+                max_features=60_000, strip_accents="unicode", sublinear_tf=True,
+            )),
+            ("char", TfidfVectorizer(
+                analyzer="char_wb", ngram_range=(3, 5), min_df=2,
+                max_features=80_000, strip_accents="unicode", sublinear_tf=True,
+            )),
         ])),
         ("classifier", CalibratedClassifierCV(
-            LogisticRegression(max_iter=1000, class_weight="balanced"), method="sigmoid", cv=3,
+            LogisticRegression(max_iter=2000, class_weight="balanced", C=2.0),
+            method="sigmoid", cv=calibration_cv,
         )),
     ])
 
@@ -141,7 +170,7 @@ def build_model() -> Pipeline:
 def threshold_candidates(probabilities: list[float], labels: list[str]) -> list[dict[str, float]]:
     actual = [label == "phishing" for label in labels]
     candidates = []
-    for step in range(20, 81):
+    for step in range(5, 96):
         threshold = step / 100
         predicted = [value >= threshold for value in probabilities]
         tp = sum(a and p for a, p in zip(actual, predicted)); fp = sum(not a and p for a, p in zip(actual, predicted))
@@ -174,12 +203,14 @@ def probabilities(model, rows: list[dict[str, str]]) -> list[float]:
 def evaluate(rows: list[dict[str, str]], scores: list[float], threshold: float) -> dict:
     labels = [row["label"] for row in rows]
     predictions = ["phishing" if score >= threshold else "legitimate" for score in scores]
-    report = classification_report(labels, predictions, output_dict=True, zero_division=0)
+    report = classification_report(
+        labels, predictions, labels=["legitimate", "phishing"], output_dict=True, zero_division=0,
+    )
     matrix = confusion_matrix(labels, predictions, labels=["legitimate", "phishing"]).tolist()
     tn, fp = matrix[0]; fn, tp = matrix[1]
     binary = [label == "phishing" for label in labels]
     return {
-        "accuracy": report["accuracy"],
+        "accuracy": accuracy_score(labels, predictions),
         "precision": report["phishing"]["precision"],
         "recall": report["phishing"]["recall"],
         "f1": report["phishing"]["f1-score"],
@@ -187,15 +218,22 @@ def evaluate(rows: list[dict[str, str]], scores: list[float], threshold: float) 
         "confusion_matrix": matrix,
         "false_positive_rate": fp / (fp + tn) if fp + tn else 0.0,
         "false_negative_rate": fn / (fn + tp) if fn + tp else 0.0,
-        "roc_auc": roc_auc_score(binary, scores),
-        "pr_auc": average_precision_score(binary, scores),
+        "false_positives": fp,
+        "false_negatives": fn,
+        "roc_auc": roc_auc_score(binary, scores) if len(set(binary)) == 2 else None,
+        "pr_auc": average_precision_score(binary, scores) if len(set(binary)) == 2 else None,
         "phishing_test_messages": labels.count("phishing"),
         "legitimate_test_messages": labels.count("legitimate"),
     }
 
 
 def split_summary(rows: list[dict[str, str]]) -> dict:
-    return {"records": len(rows), "groups": len({row["group"] for row in rows}), "class_balance": dict(Counter(row["label"] for row in rows))}
+    return {
+        "records": len(rows),
+        "groups": len({row["group"] for row in rows}),
+        "class_balance": dict(Counter(row["label"] for row in rows)),
+        "sources": dict(sorted(Counter(row["source"] for row in rows).items())),
+    }
 
 
 def git_commit() -> str:
@@ -205,45 +243,84 @@ def git_commit() -> str:
         return "unknown"
 
 
-def train() -> None:
-    raw_rows = load_dataset()
+def metrics_by_field(model, rows: list[dict[str, str]], threshold: float, field: str) -> dict:
+    result = {}
+    for value in sorted({row[field] for row in rows}):
+        subset = [row for row in rows if row[field] == value]
+        result[value] = evaluate(subset, probabilities(model, subset), threshold)
+    return result
+
+
+def train(
+    dataset_path: Path = DATASET_PATH,
+    model_path: Path = MODEL_PATH,
+    metrics_path: Path = METRICS_PATH,
+    integrity_path: Path = INTEGRITY_PATH,
+) -> dict:
+    model_staging = model_path.with_suffix(model_path.suffix + ".tmp")
+    metrics_staging = metrics_path.with_suffix(metrics_path.suffix + ".tmp")
+    integrity_staging = integrity_path.with_suffix(integrity_path.suffix + ".tmp")
+    raw_rows = load_dataset(dataset_path)
     rows, exact_duplicates, near_duplicate_groups = dedupe_and_group(raw_rows)
-    train_rows, validation_rows, test_rows = grouped_split(rows)
-    model = build_model()
+    train_rows, validation_rows, test_rows, split_strategy = split_dataset(rows)
+    calibration_splitter = StratifiedGroupKFold(n_splits=3, shuffle=True, random_state=RANDOM_STATE + 2)
+    calibration_cv = list(calibration_splitter.split(
+        train_rows,
+        [row["label"] for row in train_rows],
+        [row["group"] for row in train_rows],
+    ))
+    model = build_model(calibration_cv)
     model.fit([row["text"] for row in train_rows], [row["label"] for row in train_rows])
     validation_scores = probabilities(model, validation_rows)
     threshold, candidates = choose_threshold(validation_scores, [row["label"] for row in validation_rows])
     test_metrics = evaluate(test_rows, probabilities(model, test_rows), threshold)
-    joblib.dump(model, MODEL_PATH)
-    model_sha = sha256_file(MODEL_PATH)
-    dataset_sha = sha256_file(DATASET_PATH)
+    model_path.parent.mkdir(parents=True, exist_ok=True)
+    metrics_path.parent.mkdir(parents=True, exist_ok=True)
+    integrity_path.parent.mkdir(parents=True, exist_ok=True)
+    joblib.dump(model, model_staging)
+    model_sha = sha256_file(model_staging)
+    dataset_sha = sha256_file(dataset_path)
     metrics = {
-        "evaluation_type": "internal_grouped_holdout",
+        "evaluation_type": "Internal grouped holdout evaluation",
         "warning": "Internal evaluation results may not represent real-world university email performance. External validation is required before production use.",
         "model_name": "TF-IDF word+character n-grams with calibrated Logistic Regression",
-        "model_version": "2.0.0", "training_timestamp": datetime.now(UTC).isoformat(),
+        "model_version": "3.0.0", "training_timestamp": datetime.now(UTC).isoformat(),
         "phishing_threshold": threshold, "threshold_selection_policy": THRESHOLD_SELECTION_POLICY,
         "minimum_recall_target": MINIMUM_PHISHING_RECALL, "threshold_candidates": candidates,
         "original_dataset_size": len(raw_rows), "dataset_size": len(rows), "dataset_class_balance": dict(Counter(row["label"] for row in rows)),
         "exact_duplicates_removed": exact_duplicates, "near_duplicate_groups_detected": near_duplicate_groups,
         "number_of_groups": len({row["group"] for row in rows}),
+        "split_strategy": split_strategy,
         "splits": {"training": split_summary(train_rows), "validation": split_summary(validation_rows), "testing": split_summary(test_rows)},
         "group_leakage_check": "passed", "test_metrics": test_metrics,
-        "results_by_source": "unavailable: source metadata is not verified in the consolidated dataset",
-        "results_by_synthetic_status": "unavailable: synthetic metadata is incomplete",
+        "results_by_source": metrics_by_field(model, test_rows, threshold, "source"),
+        "results_by_synthetic_status": metrics_by_field(model, test_rows, threshold, "is_synthetic"),
+        "dataset_sources": dict(sorted(Counter(row["source"] for row in rows).items())),
         "dataset_sha256": dataset_sha, "model_sha256": model_sha, "git_commit": git_commit(), "random_state": RANDOM_STATE,
         "word_ngram_range": [1, 2], "char_ngram_range": [3, 5], "class_weight": "balanced",
-        "calibration_method": "sigmoid", "calibration_folds": 3, "training_command": "python train_model.py",
+        "logistic_regression_c": 2.0, "calibration_method": "sigmoid", "calibration_folds": 3,
+        "calibration_group_aware": True, "training_command": "python train_model.py",
         "language_support": "Primarily English; Arabic and mixed-language performance has not been evaluated.",
         "runtime": {"python": platform.python_version(), "scikit_learn": sklearn.__version__, "joblib": joblib.__version__},
     }
     canonical = json.dumps(metrics, indent=2) + "\n"
     metrics["metrics_sha256"] = hashlib.sha256(canonical.encode("utf-8")).hexdigest()
-    METRICS_PATH.write_text(json.dumps(metrics, indent=2) + "\n", encoding="utf-8")
-    integrity = {"algorithm": "sha256", "email_model.joblib": model_sha, "model_metrics.json": sha256_file(METRICS_PATH), "training_dataset.csv": dataset_sha}
-    INTEGRITY_PATH.write_text(json.dumps(integrity, indent=2) + "\n", encoding="utf-8")
-    print(json.dumps({"threshold": threshold, "splits": metrics["splits"], "test_metrics": test_metrics, "group_leakage_check": "passed"}, indent=2))
+    metrics_staging.write_text(json.dumps(metrics, indent=2) + "\n", encoding="utf-8")
+    integrity = {"algorithm": "sha256", "email_model.joblib": model_sha, "model_metrics.json": sha256_file(metrics_staging), "training_dataset.csv": dataset_sha}
+    integrity_staging.write_text(json.dumps(integrity, indent=2) + "\n", encoding="utf-8")
+    model_staging.replace(model_path)
+    metrics_staging.replace(metrics_path)
+    integrity_staging.replace(integrity_path)
+    result = {"threshold": threshold, "splits": metrics["splits"], "test_metrics": test_metrics, "group_leakage_check": "passed"}
+    print(json.dumps(result, indent=2))
+    return result
 
 
 if __name__ == "__main__":
-    train()
+    parser = argparse.ArgumentParser(description="Train and evaluate the UniPhishGuard email text model.")
+    parser.add_argument("--dataset", type=Path, default=DATASET_PATH)
+    parser.add_argument("--model-output", type=Path, default=MODEL_PATH)
+    parser.add_argument("--metrics-output", type=Path, default=METRICS_PATH)
+    parser.add_argument("--integrity-output", type=Path, default=INTEGRITY_PATH)
+    arguments = parser.parse_args()
+    train(arguments.dataset, arguments.model_output, arguments.metrics_output, arguments.integrity_output)

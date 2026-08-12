@@ -1,4 +1,5 @@
 import json
+import os
 import re
 from pathlib import Path
 
@@ -60,4 +61,15 @@ class AppSettings(BaseModel):
 
 
 def load_settings(path: Path) -> AppSettings:
-    return AppSettings.model_validate(json.loads(path.read_text(encoding="utf-8-sig")))
+    value = json.loads(path.read_text(encoding="utf-8-sig"))
+    organization = value.setdefault("organization", {})
+    overrides = {
+        "sender_domains": "APPROVED_SENDER_DOMAINS",
+        "link_domains": "APPROVED_LINK_DOMAINS",
+        "trusted_authserv_ids": "TRUSTED_AUTHSERV_IDS",
+    }
+    for field, environment_name in overrides.items():
+        raw = os.getenv(environment_name, "").strip()
+        if raw:
+            organization[field] = [item.strip() for item in raw.split(",") if item.strip()]
+    return AppSettings.model_validate(value)

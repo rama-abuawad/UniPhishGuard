@@ -16,7 +16,7 @@ def main() -> None:
     metadata = json.loads(METRICS_PATH.read_text(encoding="utf-8"))
     model = _load_model()
     result = {
-        "evaluation_type": "external_evaluation",
+        "evaluation_type": "Independent external evaluation",
         "evaluated_at": datetime.now(UTC).isoformat(),
         "dataset_path": str(args.csv_path),
         "dataset_sha256": sha256_file(args.csv_path),

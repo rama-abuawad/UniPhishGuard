@@ -8,6 +8,7 @@
     "start": "http-server . -S -C %USERPROFILE%\\.office-addin-dev-certs\\localhost.crt -K %USERPROFILE%\\.office-addin-dev-certs\\localhost.key -p 3000 -c-1",
     "test": "node --test taskpane-utils.test.js",
     "validate": "office-addin-manifest validate manifest.xml",
+    "configure:production": "node configure-production.js",
     "sideload": "office-addin-debugging start manifest.xml desktop --no-debug",
     "stop": "office-addin-debugging stop manifest.xml"
   },

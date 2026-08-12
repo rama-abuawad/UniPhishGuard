@@ -3,6 +3,7 @@ import hashlib
 import json
 import logging
 import os
+import re
 
 import joblib
 import sklearn
@@ -30,6 +31,9 @@ SUSPICIOUS_PHRASES = (
     "download attachment",
     "enable macros",
 )
+URL_PATTERN = re.compile(r"(?:https?://|www\.)[^\s<>\"']+", re.IGNORECASE)
+EMAIL_PATTERN = re.compile(r"\b[\w.+-]+@[\w.-]+\.[a-z]{2,}\b", re.IGNORECASE)
+IP_PATTERN = re.compile(r"(?<!\d)(?:\d{1,3}\.){3}\d{1,3}(?!\d)")
 
 
 def _load_model():
@@ -65,8 +69,36 @@ def predict_email_risk(email: EmailAnalysisRequest) -> tuple[str, float]:
 
 
 def explain_email_risk(email: EmailAnalysisRequest) -> list[str]:
-    text = _model_text(email).lower()
-    return [phrase for phrase in SUSPICIOUS_PHRASES if phrase in text][:5]
+    """Return the strongest active TF-IDF contributions toward phishing."""
+    try:
+        model = _load_model()
+        text = _model_text(email)
+        features = model.named_steps["features"]
+        classifier = model.named_steps["classifier"]
+        vector = features.transform([text])
+        names = features.get_feature_names_out()
+        calibrated = getattr(classifier, "calibrated_classifiers_", [])
+        coefficient_rows = [item.estimator.coef_[0] for item in calibrated]
+        if not coefficient_rows:
+            return []
+        coefficients = sum(coefficient_rows) / len(coefficient_rows)
+        contributions = vector.multiply(coefficients).tocoo()
+        ranked = sorted(
+            ((float(value), str(names[column])) for column, value in zip(contributions.col, contributions.data) if value > 0),
+            reverse=True,
+        )
+        word_ranked = [(value, name.split("__", 1)[-1]) for value, name in ranked if name.startswith("word__")]
+        char_ranked = [(value, name.split("__", 1)[-1]) for value, name in ranked if name.startswith("char__")]
+        result: list[str] = []
+        for value, feature in word_ranked + char_ranked:
+            if feature not in result:
+                result.append(feature)
+            if len(result) == 5:
+                break
+        return result
+    except (AttributeError, KeyError, TypeError, ValueError):
+        LOGGER.warning("Model feature contributions could not be generated.")
+        return []
 
 
 def _model_text(email: EmailAnalysisRequest) -> str:
@@ -86,6 +118,12 @@ def _model_text(email: EmailAnalysisRequest) -> str:
         "you don't often get email from",
     ):
         text = text.replace(phrase, " ")
+    # The attributed training dataset defangs active indicators. Apply the same
+    # transformation at inference time so a benign URL or address cannot create
+    # an out-of-distribution text pattern. URL/domain risk is handled by rules.
+    text = URL_PATTERN.sub(" URL ", text)
+    text = EMAIL_PATTERN.sub(" EMAIL ", text)
+    text = IP_PATTERN.sub(" IP_ADDRESS ", text)
     return " ".join(text.split())[:MAX_MODEL_TEXT]
 
 
@@ -124,17 +162,20 @@ def _verify_model_integrity() -> None:
     )
     try:
         integrity = json.loads(INTEGRITY_PATH.read_text(encoding="utf-8"))
-        expected = integrity["email_model.joblib"]
+        expected_model = integrity["email_model.joblib"]
+        expected_metrics = integrity["model_metrics.json"]
     except (OSError, KeyError, json.JSONDecodeError) as error:
         if allow_override:
             LOGGER.warning("Model integrity data is missing; development override is active.")
             return
         LOGGER.error("Model integrity verification failed: integrity data is missing or invalid.")
         raise RuntimeError("Model integrity data is missing or invalid.") from error
-    actual = _sha256(MODEL_PATH)
-    if actual != expected:
+    if _sha256(MODEL_PATH) != expected_model:
         LOGGER.error("Model integrity verification failed: checksum mismatch.")
         raise RuntimeError("Model checksum does not match the trusted training artifact.")
+    if not METRICS_PATH.exists() or _sha256(METRICS_PATH) != expected_metrics:
+        LOGGER.error("Model metrics integrity verification failed: checksum mismatch.")
+        raise RuntimeError("Model metrics checksum does not match the trusted training artifact.")
 
 
 def _model_threshold() -> float:
@@ -145,3 +186,9 @@ def _model_threshold() -> float:
     except (OSError, json.JSONDecodeError):
         return 0.5
     return float(metadata.get("phishing_threshold", 0.5))
+
+
+def model_threshold() -> float:
+    """Expose the verified model decision threshold for API transparency."""
+    _verify_model_integrity()
+    return _model_threshold()

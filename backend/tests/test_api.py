@@ -1,4 +1,5 @@
 import json
+from fastapi.responses import JSONResponse
 
 from app import main
 
@@ -17,3 +18,19 @@ def test_structured_error_does_not_expose_log_path():
 
 def test_development_headers_do_not_include_hsts(monkeypatch):
     assert main.APP_ENV == "development"
+
+
+def test_readiness_checks_model_integrity_and_database():
+    response = main.health_ready()
+    assert isinstance(response, JSONResponse)
+    assert response.status_code == 200
+    payload = json.loads(response.body)
+    assert payload["artifact_integrity"] is True
+    assert payload["database"] == "ok"
+
+
+def test_readiness_fails_when_database_is_unavailable(monkeypatch):
+    monkeypatch.setattr(main, "database_ready", lambda: False)
+    response = main.health_ready()
+    assert response.status_code == 503
+    assert json.loads(response.body)["database"] == "unavailable"

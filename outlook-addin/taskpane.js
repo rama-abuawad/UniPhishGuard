@@ -3,17 +3,21 @@
 // -----------------------------------------------------------------------------
 
 const params = new URLSearchParams(window.location.search);
-const configuredApi = window.location.port === "8000"
+const configuredApi = window.UNIPHISHGUARD_API_BASE_URL
+  ? String(window.UNIPHISHGUARD_API_BASE_URL).replace(/\/$/, "")
+  : window.location.pathname.startsWith("/addin/")
   ? window.location.origin
   : "https://localhost:8000";
 const devApi = window.UNIPHISHGUARD_ALLOW_API_OVERRIDE && params.get("api")
   ? params.get("api").replace(/\/analyze-email\/?$/, "")
   : null;
 const useSampleEmail = params.get("sample") === "1";
-const fallbackApis = window.location.port === "8000" ? [] : ["https://127.0.0.1:8000"];
+const fallbackApis = window.location.pathname.startsWith("/addin/") ? [] : ["https://127.0.0.1:8000"];
 const API_BASE_URLS = [devApi || configuredApi, ...fallbackApis].filter(Boolean);
 const API_TOKEN = window.UNIPHISHGUARD_API_TOKEN || "";
-const { buildReportText, categoryEvidence, escapeHtml, normalizeThreatLevel, verdictClassName } = window.UniPhishGuardUtils;
+const { attachmentCanBeRetrieved, base64Content, buildReportText, categoryEvidence, escapeHtml, inspectionStatuses, normalizeThreatLevel, verdictClassName } = window.UniPhishGuardUtils;
+const MAX_ATTACHMENT_BYTES = 5_000_000;
+const MAX_TOTAL_ATTACHMENT_BYTES = 5_000_000;
 
 // -----------------------------------------------------------------------------
 // UI initialization
@@ -158,6 +162,7 @@ async function getCurrentEmail() {
   const body = await getBodyText(item);
   const bodyHtml = await getBodyHtml(item);
   const headerResult = await getInternetHeaders(item);
+  const attachmentResult = await getAttachments(item);
   const sender = item.from || item.sender || {};
   const links = extractLinks(bodyHtml, body);
 
@@ -172,13 +177,67 @@ async function getCurrentEmail() {
     body_html: bodyHtml,
     headers: headerResult.value,
     headers_status: headerResult.status,
+    attachment_content_status: attachmentResult.status,
+    internet_message_id: item.internetMessageId || null,
+    received_at: item.dateTimeCreated ? new Date(item.dateTimeCreated).toISOString() : null,
     links,
-    attachments: (item.attachments || []).map((attachment) => ({
-      name: attachment.name,
-      content_type: attachment.contentType || null,
-      size: attachment.size || null,
-    })),
+    attachments: attachmentResult.attachments,
   };
+}
+
+async function getAttachments(item) {
+  const source = item.attachments || [];
+  const attachments = source.map((attachment) => ({
+    name: attachment.name,
+    content_type: attachment.contentType || null,
+    size: attachment.size || null,
+  }));
+  if (!source.length) return { attachments, status: "checked" };
+
+  const supported = Office.context?.requirements?.isSetSupported?.("Mailbox", "1.8");
+  if (!supported || !item.getAttachmentContentAsync) {
+    return { attachments, status: "not_available" };
+  }
+
+  let retrieved = 0;
+  let skipped = 0;
+  let retrievedBytes = 0;
+  for (let index = 0; index < source.length; index += 1) {
+    const attachment = source[index];
+    if (!attachmentCanBeRetrieved(attachment, Math.min(MAX_ATTACHMENT_BYTES, MAX_TOTAL_ATTACHMENT_BYTES - retrievedBytes))) {
+      skipped += 1;
+      continue;
+    }
+    const content = await getAttachmentContent(item, attachment.id);
+    if (content) {
+      attachments[index].content_base64 = content;
+      retrievedBytes += Math.floor(content.length * 3 / 4);
+      retrieved += 1;
+    } else {
+      skipped += 1;
+    }
+  }
+  return {
+    attachments,
+    status: retrieved === source.length ? "checked" : retrieved > 0 ? "partial" : skipped ? "not_available" : "failed",
+  };
+}
+
+function getAttachmentContent(item, attachmentId) {
+  return new Promise((resolve) => {
+    item.getAttachmentContentAsync(attachmentId, (result) => {
+      if (result.status !== Office.AsyncResultStatus.Succeeded) {
+        resolve(null);
+        return;
+      }
+      const content = base64Content(result.value);
+      if (!content || content.length > Math.ceil(MAX_ATTACHMENT_BYTES * 4 / 3) + 8) {
+        resolve(null);
+        return;
+      }
+      resolve(content);
+    });
+  });
 }
 
 async function waitForOfficeHost(timeoutMs = 10000) {
@@ -315,10 +374,10 @@ function renderReport(report) {
   const checks = buildCheckStatuses(report);
   const reasons = buildResultReasons(report, checks);
   const reasonItems = renderSimpleList(reasons, "No strong phishing evidence was found.");
-  const technicalDetails = renderTechnicalDetails(report, importantIndicators);
-  const resultSummary = report.risk_score < 25
+  const technicalDetails = renderTechnicalDetails(report, importantIndicators, checks);
+  const resultSummary = threatLevel.code === "low_risk"
     ? "No strong phishing evidence was found."
-    : report.risk_score < 55
+    : threatLevel.code === "suspicious"
       ? "Some evidence needs verification before you interact with this email."
       : "Multiple strong phishing signals were found.";
 
@@ -416,34 +475,7 @@ function renderError(error) {
 }
 
 function buildCheckStatuses(report) {
-  const indicators = report.indicators || [];
-  const hasCode = (...prefixes) => indicators.some((indicator) => prefixes.some((prefix) => indicator.code.startsWith(prefix)));
-  const hasImportantCode = (...prefixes) => indicators.some((indicator) =>
-    ["high", "medium"].includes(indicator.severity) && prefixes.some((prefix) => indicator.code.startsWith(prefix))
-  );
-
-  return [
-    {
-      label: "Sender authentication",
-      value: hasImportantCode("spf_", "dkim_", "dmarc_", "auth_") ? "Warning" : hasCode("auth_headers_not_checked", "auth_results_missing") ? "Not available" : "Passed",
-      tone: hasImportantCode("spf_", "dkim_", "dmarc_", "auth_") ? "warning" : hasCode("auth_headers_not_checked", "auth_results_missing") ? "neutral" : "safe",
-    },
-    {
-      label: "Links",
-      value: hasImportantCode("url_", "link_", "approved_domain") ? "Suspicious" : "Safe",
-      tone: hasImportantCode("url_", "link_", "approved_domain") ? "warning" : "safe",
-    },
-    {
-      label: "Attachments",
-      value: hasImportantCode("attachment", "double_extension", "dangerous_attachment", "macro_", "archive_", "zip_") ? "Suspicious" : "Safe",
-      tone: hasImportantCode("attachment", "double_extension", "dangerous_attachment", "macro_", "archive_", "zip_") ? "warning" : "safe",
-    },
-    {
-      label: "Email wording",
-      value: hasCode("ai_phishing_signal") ? "Concerning" : "Normal",
-      tone: hasCode("ai_phishing_signal") ? "warning" : "safe",
-    },
-  ];
+  return inspectionStatuses(report);
 }
 
 function buildResultReasons(report, checks) {
@@ -455,22 +487,58 @@ function buildResultReasons(report, checks) {
   const reasons = [];
   const authentication = checks.find((check) => check.label === "Sender authentication");
   if (authentication?.value === "Passed") reasons.push("Sender authentication passed.");
-  if (checks.find((check) => check.label === "Links")?.value === "Safe") reasons.push("No deceptive or dangerous link pattern was found.");
-  if (checks.find((check) => check.label === "Attachments")?.value === "Safe") reasons.push("No dangerous attachment pattern was found.");
+  if (checks.find((check) => check.label === "Links")?.value.startsWith("No suspicious")) reasons.push("No suspicious link pattern was detected.");
+  if (checks.find((check) => check.label === "Attachments")?.value.startsWith("No suspicious")) reasons.push("No suspicious attachment pattern was detected.");
   return reasons.slice(0, 3);
 }
 
-function renderTechnicalDetails(report, indicators) {
+function renderTechnicalDetails(report, indicators, checks) {
   indicators = indicators.filter((indicator) => indicator.code !== "ai_phishing_signal");
-  const categories = report.risk_score >= 25 ? renderThreatCategories(report.threat_categories || []) : "";
-  const indicatorItems = indicators.length
-    ? `<p class="detail-label">Important indicators</p><ul class="list">${renderSimpleList(indicators.map((indicator) => indicator.message), "")}</ul>`
+  const headerIndicatorCodes = /^(?:auth_|spf_|dkim_|dmarc_|forwarding_or_arc_context$|reply_to_mismatch$)/;
+  const headerIndicators = indicators.filter((indicator) => headerIndicatorCodes.test(indicator.code));
+  const otherIndicators = indicators.filter((indicator) => !headerIndicatorCodes.test(indicator.code));
+  const attackCategories = report.threat_categories || [];
+  const headerItems = headerIndicators.length
+    ? `<p class="detail-label">Header and authentication issues</p><ul class="list">${renderSimpleList(headerIndicators.map((indicator) => indicator.message), "")}</ul>`
     : "";
-  const categoryItems = categories ? `<p class="detail-label">Detected category</p><div class="category-list">${categories}</div>` : "";
+  const indicatorItems = otherIndicators.length
+    ? `<p class="detail-label">Other important findings</p><ul class="list">${renderSimpleList(otherIndicators.map((indicator) => indicator.message), "")}</ul>`
+    : "";
+  const categoryItems = attackCategories.length
+    ? `<p class="detail-label">Possible attack types</p><div class="category-list">${renderThreatCategories(attackCategories)}</div>`
+    : "";
+  const components = Object.fromEntries((report.score_breakdown || []).map((item) => [item.code, item.score]));
+  const qrLinks = (report.decoded_qr_links || []).map((item) => item.href);
+  const headerStatus = {
+    checked: "Available and checked",
+    not_available: "Not available in Outlook",
+    failed: "Could not be retrieved",
+  }[report.authentication_headers_status] || "Not available";
+  const detailRows = [
+    ["Final score", `${report.risk_score}/100`],
+    ["Verdict", report.verdict],
+    ["Threat level", report.threat_level?.label || "Unknown"],
+    ["ML phishing probability", `${Math.round((report.ai_confidence || 0) * 100)}%`],
+    ["Authentication risk impact", `${components.authentication || 0}`],
+    ["Sender/rule risk impact", `${components.sender_identity || 0}`],
+    ["URL risk impact", `${components.urls || 0}`],
+    ["Attachment risk impact", `${components.attachments || 0}`],
+    ["Impersonation risk impact", `${components.university_impersonation || 0}`],
+    ["URLs inspected", `${report.url_count || 0}`],
+    ["Attachments listed", `${report.attachment_count || 0}`],
+    ["Attachment contents inspected", `${report.attachment_contents_inspected || 0} (${report.attachment_content_status || "unavailable"})`],
+    ["Email headers", headerStatus],
+    ["QR URLs discovered", qrLinks.length ? qrLinks.join(", ") : "None"],
+  ].map(([label, value]) => `<dt>${escapeHtml(label)}</dt><dd>${escapeHtml(value)}</dd>`).join("");
+  const checkRows = checks.map((check) => `<dt>${escapeHtml(check.label)}</dt><dd class="${escapeHtml(check.tone)}">${escapeHtml(check.value)}</dd>`).join("");
   return `
     <details class="technical-details">
       <summary>Show technical details</summary>
+      <p class="detail-label">Inspection status</p>
+      <dl class="technical-grid">${checkRows}</dl>
+      <dl class="technical-grid">${detailRows}</dl>
       ${categoryItems}
+      ${headerItems}
       ${indicatorItems}
     </details>
   `;
@@ -485,8 +553,14 @@ function openItReportDraft() {
   const reportText = buildReportText({ ...lastReport, threat_level: threatLevel });
   const originalDetails = lastScannedEmail
     ? [
+        `Scan ID: ${lastReport.scan_id || "Unavailable"}`,
+        `Internet Message ID: ${lastScannedEmail.internet_message_id || "Unavailable"}`,
         `Original subject: ${lastScannedEmail.subject || "(No subject)"}`,
         `Original sender: ${lastScannedEmail.sender?.name || "Unknown"} <${lastScannedEmail.sender?.email || "unknown"}>`,
+        `Message timestamp: ${lastScannedEmail.received_at || "Unavailable"}`,
+        `URLs inspected: ${lastReport.url_count || 0}`,
+        `Attachments listed: ${lastReport.attachment_count || 0}`,
+        `Attachment contents inspected: ${lastReport.attachment_contents_inspected || 0}`,
       ].join("\n")
     : "";
   const body = [
@@ -611,7 +685,7 @@ function threatLevelClassName(code, verdict) {
   if (code === "suspicious") {
     return "verdict-suspicious";
   }
-  if (code === "safe") {
+  if (code === "safe" || code === "low_risk") {
     return "verdict-legitimate";
   }
   return verdictClassName(verdict);

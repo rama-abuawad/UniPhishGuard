@@ -6,6 +6,7 @@ import binascii
 import hashlib
 import io
 import zipfile
+import os
 from pathlib import Path
 from email.utils import parseaddr
 from html.parser import HTMLParser
@@ -16,7 +17,7 @@ from urllib.parse import parse_qs, unquote, urlparse
 import cv2
 import numpy as np
 
-from .ai import explain_email_risk, predict_email_risk
+from .ai import explain_email_risk, model_threshold, predict_email_risk
 from .config import load_settings
 from .schemas import EmailAnalysisRequest, EmailAnalysisResponse, Indicator, LinkInfo, ScoreComponent, ThreatCategory, ThreatLevel
 
@@ -155,9 +156,9 @@ AUTH_PLAIN_EXPLANATIONS = {
 AUTH_BAD_RESULTS = {"fail", "softfail", "permerror", "temperror"}
 AUTH_PASS_RESULTS = {"pass"}
 AUTH_INCONCLUSIVE_RESULTS = {"neutral", "none", "policy", "bestguesspass"}
-MAX_ATTACHMENT_BYTES = 5_000_000
-MAX_ZIP_ENTRIES = 50
-MAX_ZIP_UNCOMPRESSED_BYTES = 20_000_000
+MAX_ATTACHMENT_BYTES = int(os.getenv("MAX_ATTACHMENT_BYTES", "5000000"))
+MAX_ZIP_ENTRIES = int(os.getenv("MAX_ZIP_ENTRIES", "50"))
+MAX_ZIP_UNCOMPRESSED_BYTES = int(os.getenv("MAX_ZIP_UNCOMPRESSED_BYTES", "20000000"))
 
 
 def analyze_email(email: EmailAnalysisRequest) -> EmailAnalysisResponse:
@@ -168,7 +169,7 @@ def analyze_email(email: EmailAnalysisRequest) -> EmailAnalysisResponse:
     url_count = len({link.href for link in links})
 
     indicators.extend(_check_sender_reply_to(email))
-    indicators.extend(_check_authentication_results(email.headers, email.headers_status))
+    indicators.extend(_check_authentication_results(email.headers, email.headers_status, _domain_from_address(str(email.sender.email))))
     indicators.extend(_check_urls(email, links))
     indicators.extend(attachment_indicators)
     indicators.extend(_check_university_impersonation(email))
@@ -177,6 +178,12 @@ def analyze_email(email: EmailAnalysisRequest) -> EmailAnalysisResponse:
     ai_prediction, ai_confidence = predict_email_risk(email)
     ai_evidence = explain_email_risk(email)
     trusted_context = _has_trusted_sender_context(email)
+    # Text alone can resemble phishing in legitimate account, payment and
+    # password notices. A verified approved sender is strong independent
+    # evidence, so suppress only moderate text-only labels. High-confidence ML
+    # results and all rule-based URL/header/attachment findings remain active.
+    if trusted_context and ai_prediction == "phishing" and ai_confidence < 0.75:
+        ai_prediction = "legitimate"
     if ai_prediction == "phishing" and not trusted_context and ai_confidence >= 0.75:
         indicators.append(
             Indicator(
@@ -188,6 +195,10 @@ def analyze_email(email: EmailAnalysisRequest) -> EmailAnalysisResponse:
 
     categories = _detect_threat_categories(email, indicators)
     score, score_breakdown = _score(indicators, ai_prediction, ai_confidence)
+    attachment_contents_inspected = len(attachment_hashes)
+    attachment_content_status = email.attachment_content_status
+    if email.attachments and attachment_contents_inspected < len(email.attachments) and attachment_content_status == "checked":
+        attachment_content_status = "partial" if attachment_contents_inspected else "not_available"
     return EmailAnalysisResponse(
         verdict=_verdict(score),
         risk_score=score,
@@ -195,12 +206,17 @@ def analyze_email(email: EmailAnalysisRequest) -> EmailAnalysisResponse:
         threat_categories=categories,
         ai_prediction=ai_prediction,
         ai_confidence=ai_confidence,
+        ai_threshold=model_threshold(),
         ai_evidence=ai_evidence,
         score_breakdown=score_breakdown,
         top_reasons=_top_reasons(indicators, ai_evidence),
         url_count=url_count,
         attachment_count=len(email.attachments),
         attachment_hashes=attachment_hashes,
+        attachment_contents_inspected=attachment_contents_inspected,
+        attachment_content_status=attachment_content_status,
+        authentication_headers_status=email.headers_status,
+        authentication_status=_authentication_status(email.headers, email.headers_status, indicators),
         decoded_qr_links=qr_links,
         indicators=indicators,
         recommended_actions=_recommended_actions(score, indicators),
@@ -222,7 +238,7 @@ def _check_sender_reply_to(email: EmailAnalysisRequest) -> list[Indicator]:
     return []
 
 
-def _check_authentication_results(headers: str, status: str = "checked") -> list[Indicator]:
+def _check_authentication_results(headers: str, status: str = "checked", visible_from_domain: str = "") -> list[Indicator]:
     if status != "checked":
         return [
             Indicator(
@@ -289,7 +305,7 @@ def _check_authentication_results(headers: str, status: str = "checked") -> list
                 )
             )
 
-    if _has_auth_alignment_problem(auth_blocks):
+    if _has_auth_alignment_problem(auth_blocks, visible_from_domain):
         indicators.append(
             Indicator(
                 code="auth_alignment_warning",
@@ -467,6 +483,7 @@ def _authentication_result_blocks(headers: str) -> list[str]:
 
 def _parse_authentication_results(blocks: list[str]) -> dict[str, list[dict[str, str]]]:
     results: dict[str, list[dict[str, str]]] = {"spf": [], "dkim": [], "dmarc": []}
+    identity_fields = {"spf": "smtp.mailfrom", "dkim": "header.d", "dmarc": "header.from"}
 
     for block in blocks:
         lowered = block.lower()
@@ -474,7 +491,7 @@ def _parse_authentication_results(blocks: list[str]) -> dict[str, list[dict[str,
             for match in re.finditer(rf"\b{protocol}\s*=\s*([a-z]+)", lowered):
                 result = match.group(1)
                 window = lowered[match.start() : match.start() + 220]
-                domain_match = re.search(r"\b(?:smtp\.mailfrom|header\.d|header\.from)=([^;\s]+)", window)
+                domain_match = re.search(rf"\b{re.escape(identity_fields[protocol])}=([^;\s]+)", window)
                 results[protocol].append(
                     {
                         "result": result,
@@ -493,16 +510,36 @@ def _trusted_authentication_block(block: str) -> bool:
     return any(authserv_id == trusted or authserv_id.endswith(f".{trusted}") for trusted in TRUSTED_AUTHSERV_IDS)
 
 
-def _has_auth_alignment_problem(blocks: list[str]) -> bool:
+def _has_auth_alignment_problem(blocks: list[str], visible_from_domain: str = "") -> bool:
+    parsed = _parse_authentication_results(blocks)
+    for protocol in ("dmarc", "dkim", "spf"):
+        for result in parsed[protocol]:
+            if result["result"] == "pass" and result["domain"] and visible_from_domain:
+                if not _same_registrable_domain(result["domain"], visible_from_domain):
+                    return True
+            if result["result"] in AUTH_BAD_RESULTS and protocol == "dmarc":
+                return True
     for block in blocks:
-        lowered = block.lower()
-        if "dmarc=pass" in lowered and re.search(r"\bheader\.from=[^;\s]+", lowered):
-            continue
-        if re.search(r"\bdmarc\s*=\s*fail\b", lowered):
-            return True
-        if re.search(r"\b(alignment|aligned)\s*=\s*(fail|none|no)\b", lowered):
+        if re.search(r"\b(alignment|aligned)\s*=\s*(fail|none|no)\b", block.lower()):
             return True
     return False
+
+
+def _authentication_status(headers: str, status: str, indicators: list[Indicator]) -> str:
+    if status != "checked" or not headers.strip():
+        return "not_available"
+    codes = {indicator.code for indicator in indicators}
+    if "auth_results_untrusted" in codes:
+        return "untrusted"
+    if any(code.endswith("_failed") or code == "auth_alignment_warning" for code in codes):
+        return "failed"
+    trusted = [block for block in _authentication_result_blocks(headers) if _trusted_authentication_block(block)]
+    parsed = _parse_authentication_results(trusted)
+    if any(result["result"] == "pass" for result in parsed["dmarc"]) and any(
+        result["result"] == "pass" for protocol in ("spf", "dkim") for result in parsed[protocol]
+    ):
+        return "passed"
+    return "not_available"
 
 
 def _check_attachments(email: EmailAnalysisRequest) -> tuple[list[Indicator], list[str], list[LinkInfo]]:
@@ -515,6 +552,10 @@ def _check_attachments(email: EmailAnalysisRequest) -> tuple[list[Indicator], li
         final_ext = _final_extension(lowered_name)
         content_type = (attachment.content_type or "").lower()
         content = _safe_attachment_bytes(attachment.content_base64)
+        if attachment.content_base64 and content is None:
+            indicators.append(
+                Indicator(code="attachment_content_invalid", severity="medium", message=f"Attachment content could not be decoded or exceeded the inspection limit: {attachment.name}")
+            )
 
         double_match = re.search(r"\.(pdf|docx?|xlsx?|pptx?)\.(exe|scr|js|vbs|bat|cmd|ps1)$", lowered_name)
         if double_match:
@@ -610,7 +651,18 @@ def _inspect_zip_attachment(name: str, content: bytes, ext: str, content_type: s
             for entry in entries:
                 entry_name = _normalize_filename(entry.filename)
                 entry_ext = _final_extension(entry_name)
-                if entry_ext in HIGH_RISK_EXTENSIONS or entry_ext in MACRO_EXTENSIONS:
+                normalized_parts = Path(entry_name.replace("\\", "/")).parts
+                if entry_name.startswith(("/", "\\")) or ".." in normalized_parts:
+                    indicators.append(
+                        Indicator(code="zip_path_traversal", severity="high", message=f"ZIP attachment contains an unsafe path: {entry.filename}")
+                    )
+                    break
+                if entry_ext in ARCHIVE_EXTENSIONS:
+                    indicators.append(
+                        Indicator(code="zip_contains_nested_archive", severity="medium", message=f"ZIP attachment contains a nested archive: {entry.filename}")
+                    )
+                    break
+                if entry_ext in HIGH_RISK_EXTENSIONS or entry_ext in MACRO_EXTENSIONS or re.search(r"\.[a-z0-9]{2,5}\.(?:exe|scr|js|vbs|bat|cmd|ps1)$", entry_name):
                     indicators.append(
                         Indicator(
                             code="zip_contains_risky_file",
@@ -704,7 +756,10 @@ def _detect_threat_categories(
     text = _email_text(email)
     categories: list[ThreatCategory] = []
     indicator_codes = {indicator.code for indicator in indicators}
-    category_context = any(indicator.severity in {"medium", "high"} for indicator in indicators)
+    category_context = any(
+        indicator.code != "ai_phishing_signal" and indicator.severity in {"medium", "high"}
+        for indicator in indicators
+    )
 
     if category_context:
         for code, label, keywords in THREAT_CATEGORY_RULES:
@@ -823,8 +878,14 @@ def _score(
         indicator.code != "ai_phishing_signal" and indicator.severity in {"medium", "high"}
         for indicator in indicators
     )
-    if ai_prediction == "phishing" and ai_confidence >= 0.75 and corroborated:
-        raw_components["ai_language"] += round(SCORING_CONFIG["ai_phishing_weight"] * ai_confidence)
+    if ai_prediction == "phishing" and ai_confidence >= 0.75:
+        if corroborated:
+            ai_score = round(SCORING_CONFIG["ai_phishing_weight"] * ai_confidence)
+        elif ai_confidence >= 0.90:
+            ai_score = SCORING_CONFIG["verdict_thresholds"]["suspicious"]
+        else:
+            ai_score = min(12, SCORING_CONFIG["verdict_thresholds"]["suspicious"] - 1)
+        raw_components["ai_language"] += ai_score
 
     for indicator in indicators:
         category = indicator_categories.get(indicator.code, "other")
@@ -867,28 +928,30 @@ def _top_reasons(indicators: list[Indicator], ai_evidence: list[str]) -> list[st
 
 
 def _verdict(score: int) -> str:
-    if score >= 80:
+    thresholds = SCORING_CONFIG["verdict_thresholds"]
+    if score >= thresholds["high_risk"]:
         return "High-risk phishing"
-    if score >= 55:
+    if score >= thresholds["phishing"]:
         return "Likely phishing"
-    if score >= 25:
+    if score >= thresholds["suspicious"]:
         return "Suspicious"
-    return "Likely legitimate"
+    return "Low Risk"
 
 
 def _threat_level(score: int) -> ThreatLevel:
-    if score >= 80:
-        return ThreatLevel(code="critical", label="Critical", color="#c93232", score_floor=80)
-    if score >= 55:
-        return ThreatLevel(code="high_risk", label="High Risk", color="#d45500", score_floor=55)
-    if score >= 25:
-        return ThreatLevel(code="suspicious", label="Suspicious", color="#c87816", score_floor=25)
-    return ThreatLevel(code="safe", label="Safe", color="#1f7a4d", score_floor=0)
+    thresholds = SCORING_CONFIG["verdict_thresholds"]
+    if score >= thresholds["high_risk"]:
+        return ThreatLevel(code="critical", label="Critical", color="#c93232", score_floor=thresholds["high_risk"])
+    if score >= thresholds["phishing"]:
+        return ThreatLevel(code="high_risk", label="High Risk", color="#d45500", score_floor=thresholds["phishing"])
+    if score >= thresholds["suspicious"]:
+        return ThreatLevel(code="suspicious", label="Needs Review", color="#c87816", score_floor=thresholds["suspicious"])
+    return ThreatLevel(code="low_risk", label="Low Risk", color="#1f7a4d", score_floor=0)
 
 
 def _recommended_actions(score: int, indicators: list[Indicator]) -> list[str]:
-    if score < 25:
-        return ["No major phishing signs were found. Still be careful."]
+    if score < SCORING_CONFIG["verdict_thresholds"]["suspicious"]:
+        return ["No significant phishing indicators were detected."]
 
     actions = [
         "Do not click links or open attachments yet.",
@@ -910,7 +973,10 @@ def _domain_from_address(address: str) -> str:
 
 def _has_trusted_sender_context(email: EmailAnalysisRequest) -> bool:
     sender_domain = _domain_from_address(str(email.sender.email))
-    return _is_approved_sender_domain(sender_domain)
+    if not _is_approved_sender_domain(sender_domain):
+        return False
+    indicators = _check_authentication_results(email.headers, email.headers_status, sender_domain)
+    return _authentication_status(email.headers, email.headers_status, indicators) == "passed"
 
 
 def _url_hosts(email: EmailAnalysisRequest) -> set[str]:

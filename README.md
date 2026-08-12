@@ -7,7 +7,7 @@ UniPhishGuard uses two understandable detection methods together:
 - A trained text model looks for language patterns learned from labelled legitimate and phishing emails.
 - Security rules look for concrete warning signs such as a different Reply-To domain, failed DMARC authentication, misleading links, lookalike university domains, or dangerous attachments.
 
-Neither method makes the decision alone. Their evidence is combined into one result that supports the user and IT team when reviewing the message.
+Machine learning can increase suspicion and recommend review, while high-risk phishing classifications rely on corroborating technical evidence whenever possible. UniPhishGuard is a decision-support tool; it does not replace the university secure email gateway, SOC, or IT investigation process.
 
 ## What happens when an email is scanned
 
@@ -22,7 +22,7 @@ Neither method makes the decision alone. Their evidence is combined into one res
 
 ## How it works
 
-1. `outlook-addin/taskpane.js` reads the subject, sender, Reply-To, body, internet headers, links, and attachment metadata.
+1. `outlook-addin/taskpane.js` reads the subject, sender, Reply-To, body, available internet headers, links, and attachment metadata. On Outlook clients supporting Mailbox 1.8, it also retrieves bounded attachment content for QR, ZIP, and hash inspection.
 2. FastAPI validates the request and sends it to the email analyzer.
 3. A TF-IDF pipeline with calibrated Logistic Regression estimates phishing probability.
 4. Deterministic checks inspect sender identity, SPF/DKIM/DMARC results, URLs, attachments, QR links, and university impersonation.
@@ -52,9 +52,10 @@ backend/
     model_integrity.json    Trusted artifact checksums
     model_metrics.json      Evaluation metrics and selected threshold
   data/
-    training_dataset.csv    Consolidated training dataset
+    training_dataset.csv    Attributed, source-aware training dataset
     DATASET_CARD.md         Dataset provenance and limitations
   tests/                    Backend security, model, API, and analyzer tests
+  prepare_training_data.py  Licensed-corpus preparation and sanitization
   train_model.py            TF-IDF + Logistic Regression training
   evaluate_external.py      Evaluation against a separate labelled dataset
 outlook-addin/
@@ -68,7 +69,7 @@ outlook-addin/
 
 ## Run the Outlook add-in locally
 
-Prerequisites: Python 3.11 or later, Node.js/npm, and classic Outlook for Windows with add-in sideloading available.
+Prerequisites: Python 3.14, Node.js/npm, and classic Outlook for Windows with add-in sideloading available. The saved model was trained with Python 3.14.3, scikit-learn 1.9.0, and joblib 1.5.3; the exact scikit-learn and joblib versions are pinned for artifact compatibility.
 
 The current manifest loads both the task pane and API from `https://localhost:8000`. FastAPI serves the files in `outlook-addin/` under `/addin`, so `npm run start` is not needed.
 
@@ -129,22 +130,22 @@ If startup reports that port 8000 is already in use, an older backend process is
 
 Legacy `/analyze-email` and `/history` aliases remain for the add-in. Interactive API documentation is available at `/docs` during development.
 
-Copy `backend/.env.example` to `.env` and configure allowed origins, limits, retention, and optional API-token or Microsoft Entra authentication. Never place production secrets in `taskpane.js` or commit them to Git.
+Copy `backend/.env.example` to `backend/.env` and configure allowed origins, limits, retention, organization domains, trusted authentication servers, and authentication. The application loads this file during package initialization. Never place production secrets in frontend JavaScript or commit them to Git.
 
-`APP_ENV` supports `development`, `testing`, and `production`. Development permits the explicitly insecure local identity header so the add-in can be demonstrated without Entra. Production requires Microsoft Entra tenant/client configuration, ignores the client identity header, rejects anonymous history access, and refuses startup with the development history-HMAC secret. Do not put a shared API token in frontend JavaScript.
+`APP_ENV` supports `development`, `testing`, and `production`, and startup logs the selected mode without logging secrets. Development permits the local identity header for demonstrations. Production requires Microsoft Entra tenant/client configuration and a strong history HMAC secret, ignores the client identity header, rejects anonymous access, validates JWT signature, issuer, tenant, audience, expiry and claims, and fails startup instead of downgrading to development authentication. The project validates backend tokens but does not claim complete production Microsoft SSO until the operator has completed and tested the matching Entra app registration and Outlook deployment configuration.
 
 The prototype rate limiter is bounded and separates authenticated user/IP keys. Proxy headers are ignored unless `TRUST_PROXY_HEADERS=true`. It is process-local and is not reliable across multiple Uvicorn workers or service instances; production scaling should use a shared implementation such as Redis behind the same limiter interface. Enforce the request-body limit at Render or any other reverse proxy as well as in FastAPI.
 
 ## Model training
 
-`backend/data/training_dataset.csv` is the only training input. It contains `label` and `text` columns and combines the curated university examples with the final labeled phishing/legitimate corpus.
+`backend/data/training_dataset.csv` is the only training input. It contains `label`, `text`, `source`, `template_id`, `is_synthetic`, and `split` columns. The dataset combines real CC BY 4.0 phishing mail from the Nazario corpus, legitimate ham from the CC BY 4.0 Figshare curated release, and a small deduplicated set of reviewed university hard cases. Spam rows are excluded rather than treated as phishing. Full provenance, source notices, limitations, and evaluation counts are documented in `backend/data/DATASET_CARD.md`.
 
 ```powershell
 cd backend
 python train_model.py
 ```
 
-Training performs exact-text deduplication, stratified train/validation/test splitting, word and character TF-IDF feature extraction, calibrated Logistic Regression, and validation-set threshold selection. It writes `app/email_model.joblib` and `app/model_metrics.json`.
+Training verifies the declared source-aware splits, checks for group leakage, performs word and character TF-IDF feature extraction, fits calibrated Logistic Regression with group-aware calibration folds, and selects the decision threshold on validation data. The 2025 Nazario phishing messages are reserved for testing. It stages and publishes `app/email_model.joblib`, `app/model_metrics.json`, and `app/model_integrity.json` together so stale checksums are not silently trusted.
 
 Splits are group-aware: normalized template fingerprints keep related messages in one partition. Threshold selection targets at least 95% phishing recall by default and then minimizes false positives. Training also writes `app/model_integrity.json` with SHA-256 checksums for the model, metrics, and dataset. Joblib artifacts use pickle-based deserialization and must come only from the trusted offline training process.
 
@@ -161,7 +162,7 @@ The model is an English-focused baseline. Treat its probability as one signal, n
 
 The complete provenance and limitations record is in [`backend/data/DATASET_CARD.md`](backend/data/DATASET_CARD.md). The consolidated file contains 11,000 records: repository history identifies 1,000 as locally template-generated, while the source and licence for the other 10,000 cannot currently be verified. **Source or licence requires verification before public redistribution.**
 
-Internal evaluation results may not represent real-world university email performance. External validation is required before production use. Current language coverage is primarily English; the project does not claim Arabic or multilingual phishing-detection performance.
+The saved text model records 98.03% accuracy, 98.69% phishing precision, and 84.30% phishing recall on the source-aware test split, including 446 unseen Nazario phishing emails from 2025. This is an **Internal grouped holdout evaluation**, not guaranteed real-world accuracy or an end-to-end detector metric. Current language coverage is primarily English; the project does not claim Arabic or multilingual phishing-detection performance.
 
 ## Rule-based analysis
 
@@ -171,30 +172,44 @@ Rules cover:
 - SPF, DKIM, DMARC, alignment, forwarding, and unavailable headers;
 - misleading link text, IP-address URLs, punycode, shorteners, encoded URLs, and unusual ports;
 - dangerous, double-extension, macro-enabled, MIME-mismatched, and archive attachments;
-- QR-code links and archive contents within bounded processing limits;
+- QR-code links and ZIP contents when Outlook supplies supported attachment bytes, within bounded processing limits;
 - university-domain lookalikes and fake campus services.
 
 URL analysis is heuristic and does not confirm whether a domain is currently listed as malicious. UniPhishGuard does not send URLs or email content to an external reputation provider.
 
 Authentication results are accepted only from configured trusted `authserv-id` values. Missing results are treated as unavailable, and untrusted `Authentication-Results` headers are not accepted as proof of SPF, DKIM, or DMARC. Header availability and forwarding/ARC behavior vary by Outlook and Exchange configuration, so these checks remain supporting evidence rather than definitive authentication.
 
-Weights and category caps are configured in `backend/app/settings.json`. High-impact rule evidence can outweigh the statistical model, while per-category caps prevent repeated similar indicators from dominating the score.
+Weights, category caps, and verdict thresholds are configured in `backend/app/settings.json`. High-confidence AI-only evidence can recommend review but is capped below the high-risk classifications; corroborating technical evidence enables stronger scores. Per-category caps prevent repeated similar indicators from dominating the score.
 
 ## Privacy and security
 
-SQLite stores a redacted subject, pseudonymized sender, score, verdict, and scan time. It does not store the full body, headers, attachment contents, or raw sender address. History is scoped by user and trimmed by age and count.
+SQLite stores a redacted subject, pseudonymized sender, score, verdict, and scan time. It does not store the full body, headers, attachment contents, credentials, tokens, or raw sender address. History is scoped by user and enforces the configured age and item-count limits.
 
 Email content still crosses the network between the add-in and API. Production deployments must use HTTPS, restrictive CORS, authentication, rate limits, protected logs, and an approved retention policy.
 
-The **Report to IT** action opens a draft and never sends automatically or adds the message to training. A safe future feedback workflow is: collect limited feedback, remove sensitive data, have an administrator verify the label, add only approved examples to a controlled dataset, retrain offline, compare against the previous model, and deploy only after validation.
+The **Report to IT** action opens a draft and never sends automatically, deletes, quarantines, or adds the message to training. The draft includes the scan ID, available Internet Message ID, sender, subject, timestamp, score, verdict, categories, important rule indicators, and URL/attachment counts without including the email body or ML probability. The recipient remains empty unless an operator configures a recipient workflow.
 
-## Future work
+## Outlook capabilities and production URLs
+
+The manifest keeps Mailbox 1.5 compatibility. Internet headers and attachment content require Mailbox 1.8; the add-in checks support at runtime and reports unavailable or partial inspection instead of claiming those checks passed.
+
+Local development uses `https://localhost:8000`. For production, generate a deployment manifest and frontend API configuration without editing application logic:
+
+```bat
+cd outlook-addin
+npm run configure:production -- --app-url https://addin.example.edu --api-url https://api.example.edu
+```
+
+This creates `dist/manifest.xml` and `dist/config.js`. Publish the task-pane files with `dist/config.js` deployed as `config.js`, distribute `dist/manifest.xml`, and validate the production manifest before deployment. Use only real HTTPS origins approved by the university.
+
+## Current limitations and future work
 
 - Curate and license representative Arabic phishing samples.
 - Evaluate Arabic and mixed Arabic-English messages separately.
 - Add reviewed Arabic university-branding and social-engineering terms.
 - Validate on an independently sourced university-email dataset.
-- Consider an optional reputation-provider interface only after privacy and data-sharing review; no provider is enabled now.
+- Some Outlook clients do not expose internet headers or attachment bytes; the UI reports those capabilities as unavailable.
+- The process-local rate limiter is suitable for the local demo, not a multi-instance production deployment.
 
 ## Testing
 
@@ -205,12 +220,11 @@ python -m compileall -q app tests train_model.py
 
 cd ..\outlook-addin
 node --check taskpane.js
+npm test
 npm run validate
 ```
 
-The retained automated suite is backend-focused. Playwright and frontend automated tests were intentionally removed to keep the project small; the Outlook task pane should be smoke-tested through sideloading after UI changes.
-
-Pure task-pane utilities use Node's built-in test runner (`npm test`); Playwright is not used. Manual smoke test: start the HTTPS backend, sideload the validated manifest, open both legitimate and suspicious messages, scan each, inspect technical details and history, open the IT-report draft, verify that no message is sent automatically, and confirm error handling after stopping the backend.
+Backend security and integration tests use pytest. Pure task-pane utilities use Node's built-in test runner. Manual Outlook testing remains necessary for Office.js host behavior: start the HTTPS backend, sideload the validated manifest, scan the deterministic scenarios in `backend/demo/`, inspect capabilities and technical details, verify history, open the IT-report draft, and confirm that no message is sent automatically.
 
 UniPhishGuard estimates phishing risk and supports user and IT review. It does not detect all phishing, and a low-risk result does not guarantee that an email is safe.
 

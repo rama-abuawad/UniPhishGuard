@@ -143,10 +143,22 @@ h1 {
   padding: 6px 8px;
 }
 
-.threat-badge.safe {
+.threat-badge.safe,
+.threat-badge.low_risk {
   background: #e9f7ef;
   color: #145c39;
 }
+
+.technical-grid {
+  display: grid;
+  grid-template-columns: minmax(120px, 1fr) minmax(90px, 1fr);
+  gap: 6px 12px;
+  margin: 12px 0;
+  font-size: 13px;
+}
+
+.technical-grid dt { color: #52627a; }
+.technical-grid dd { margin: 0; overflow-wrap: anywhere; font-weight: 600; }
 
 .threat-badge.suspicious {
   background: #fff4df;

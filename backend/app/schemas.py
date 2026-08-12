@@ -44,6 +44,9 @@ class EmailAnalysisRequest(BaseModel):
     body_html: str | None = Field(default=None, max_length=MAX_HTML_LENGTH)
     headers: str = Field(default="", max_length=MAX_HEADERS_LENGTH)
     headers_status: str = Field(default="checked", pattern="^(checked|not_available|failed)$")
+    attachment_content_status: str = Field(default="not_requested", pattern="^(checked|partial|not_available|failed|not_requested)$")
+    internet_message_id: str | None = Field(default=None, max_length=998)
+    received_at: str | None = Field(default=None, max_length=100)
     links: list[LinkInfo] = Field(default_factory=list, max_length=MAX_LINKS)
     attachments: list[AttachmentInfo] = Field(default_factory=list, max_length=MAX_ATTACHMENTS)
 
@@ -84,12 +87,17 @@ class EmailAnalysisResponse(BaseModel):
     threat_categories: list[ThreatCategory] = Field(default_factory=list)
     ai_prediction: str
     ai_confidence: float = Field(ge=0, le=1)
+    ai_threshold: float = Field(default=0.5, ge=0, le=1)
     ai_evidence: list[str] = Field(default_factory=list)
     score_breakdown: list[ScoreComponent] = Field(default_factory=list)
     top_reasons: list[str] = Field(default_factory=list)
     url_count: int = 0
     attachment_count: int = 0
     attachment_hashes: list[str] = Field(default_factory=list)
+    attachment_contents_inspected: int = 0
+    attachment_content_status: str = "not_requested"
+    authentication_headers_status: str = "not_available"
+    authentication_status: str = "not_available"
     decoded_qr_links: list[LinkInfo] = Field(default_factory=list)
     indicators: list[Indicator]
     recommended_actions: list[str]

@@ -43,3 +43,13 @@ def test_too_many_attachments_rejected():
 def test_malformed_attachment_metadata_rejected():
     with pytest.raises(ValidationError):
         AttachmentInfo(name="", size=-1)
+
+
+def test_unsupported_url_scheme_rejected():
+    with pytest.raises(ValidationError):
+        LinkInfo(href="javascript:alert(1)")
+
+
+def test_invalid_capability_status_rejected():
+    with pytest.raises(ValidationError):
+        _email(attachment_content_status="pretend-checked")

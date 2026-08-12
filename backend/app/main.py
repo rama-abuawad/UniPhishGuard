@@ -10,9 +10,9 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
 
-from .ai import MODEL_PATH, _load_model
+from .ai import MODEL_PATH, _load_model, _verify_model_integrity
 from .analyzer import analyze_email
-from .db import clear_history, get_history, init_db, save_scan
+from .db import clear_history, database_ready, get_history, init_db, save_scan
 from .schemas import EmailAnalysisRequest, EmailAnalysisResponse, HistoryItem
 from .rate_limit import LocalRateLimiter
 from .logging_config import configure_logger
@@ -31,7 +31,7 @@ REQUIRE_AUTH = (
     or bool(API_TOKEN)
     or bool(ENTRA_TENANT_ID and ENTRA_CLIENT_ID)
 )
-MAX_REQUEST_BYTES = int(os.getenv("MAX_REQUEST_BYTES", "1000000"))
+MAX_REQUEST_BYTES = int(os.getenv("MAX_REQUEST_BYTES", "8000000"))
 RATE_LIMIT_WINDOW_SECONDS = 60
 RATE_LIMIT_MAX_REQUESTS = int(os.getenv("RATE_LIMIT_MAX_REQUESTS", "30"))
 RATE_LIMITER = LocalRateLimiter(RATE_LIMIT_MAX_REQUESTS, RATE_LIMIT_WINDOW_SECONDS)
@@ -49,6 +49,8 @@ async def lifespan(app: FastAPI):
         history_secret = os.getenv("HISTORY_HMAC_SECRET", "")
         if len(history_secret) < 32 or history_secret == "local-dev-history-secret":
             raise RuntimeError("Production requires a strong HISTORY_HMAC_SECRET of at least 32 characters.")
+    LOGGER.info("application_start environment=%s authentication_required=%s", APP_ENV, REQUIRE_AUTH)
+    _load_model()
     init_db()
     yield
 
@@ -165,15 +167,15 @@ def _validate_entra_token(token: str) -> str:
             audience=ENTRA_CLIENT_ID,
             issuer=issuer,
         )
-    except jwt.PyJWTError as error:
+    except Exception as error:
         raise HTTPException(status_code=403, detail="Invalid Microsoft sign-in token.") from error
 
-    return str(
-        claims.get("preferred_username")
-        or claims.get("upn")
-        or claims.get("oid")
-        or "authenticated-user"
-    )
+    if claims.get("tid") and str(claims["tid"]).lower() != ENTRA_TENANT_ID.lower():
+        raise HTTPException(status_code=403, detail="Microsoft token tenant does not match configuration.")
+    identity = claims.get("preferred_username") or claims.get("upn") or claims.get("oid")
+    if not identity:
+        raise HTTPException(status_code=403, detail="Microsoft token does not contain a supported user identity claim.")
+    return str(identity)
 
 
 @app.get("/health", summary="Service health", description="Returns a basic liveness result without inspecting the model.")
@@ -186,23 +188,33 @@ def health_live() -> dict[str, str]:
     return {"status": "live"}
 
 
-@app.get("/health/ready", summary="Readiness probe", description="Verifies that the trusted model artifact exists, passes integrity checks, and can be loaded.")
-def health_ready() -> dict[str, str | bool]:
+@app.get("/health/ready", summary="Readiness probe", description="Verifies model and metrics integrity, model loading, database access, and critical configuration.")
+def health_ready():
     model_exists = MODEL_PATH.exists()
     model_ready = False
+    integrity_ready = False
     if model_exists:
         try:
+            _verify_model_integrity()
+            integrity_ready = True
             _load_model()
             model_ready = True
         except Exception:
             model_ready = False
-    return {
-        "status": "ready" if model_ready else "degraded",
-        "database": "ok",
+    db_ready = database_ready()
+    configuration_ready = APP_ENV != "production" or bool(ENTRA_TENANT_ID and ENTRA_CLIENT_ID and len(os.getenv("HISTORY_HMAC_SECRET", "")) >= 32)
+    ready = model_ready and integrity_ready and db_ready and configuration_ready
+    payload = {
+        "status": "ready" if ready else "degraded",
+        "environment": APP_ENV,
+        "database": "ok" if db_ready else "unavailable",
         "model_exists": model_exists,
         "model_ready": model_ready,
+        "artifact_integrity": integrity_ready,
+        "configuration_ready": configuration_ready,
         "api_version": "v1",
     }
+    return JSONResponse(status_code=200 if ready else 503, content=payload)
 
 
 def _analyze_email_route(email: EmailAnalysisRequest, user_id: str, request_id: str = "unknown") -> EmailAnalysisResponse:

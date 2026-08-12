@@ -1,10 +1,23 @@
 from pathlib import Path
+import base64
+import io
+import zipfile
+
+import cv2
 from uuid import uuid4
 
 from app import analyzer
 from app.analyzer import analyze_email
 from app import db
 from app.schemas import AttachmentInfo, EmailAnalysisRequest, EmailAddress, LinkInfo
+
+
+def _zip_base64(entries: dict[str, bytes]) -> str:
+    stream = io.BytesIO()
+    with zipfile.ZipFile(stream, "w", zipfile.ZIP_DEFLATED) as archive:
+        for name, value in entries.items():
+            archive.writestr(name, value)
+    return base64.b64encode(stream.getvalue()).decode("ascii")
 
 
 def test_flags_high_risk_email() -> None:
@@ -38,7 +51,7 @@ def test_legitimate_email_stays_low_risk() -> None:
     )
 
     assert result.risk_score < 25
-    assert result.verdict == "Likely legitimate"
+    assert result.verdict == "Low Risk"
 
 
 def test_adu_tuition_email_is_not_marked_phishing() -> None:
@@ -59,7 +72,7 @@ def test_adu_tuition_email_is_not_marked_phishing() -> None:
     )
 
     assert result.risk_score < 25
-    assert result.verdict == "Likely legitimate"
+    assert result.verdict == "Low Risk"
     assert result.ai_prediction == "legitimate"
 
 
@@ -79,7 +92,7 @@ def test_keywords_alone_do_not_make_email_suspicious() -> None:
     )
 
     assert result.risk_score < 25
-    assert result.verdict == "Likely legitimate"
+    assert result.verdict == "Low Risk"
     assert result.threat_categories == []
     assert all(indicator.code != "ai_phishing_signal" for indicator in result.indicators)
 
@@ -108,7 +121,7 @@ def test_external_internship_schedule_email_stays_legitimate() -> None:
     )
 
     assert result.risk_score < 25
-    assert result.verdict == "Likely legitimate"
+    assert result.verdict == "Low Risk"
     assert result.threat_categories == []
     assert result.indicators == []
 
@@ -189,7 +202,9 @@ def test_ai_phishing_signal_cannot_score_zero(monkeypatch) -> None:
     )
 
     assert result.risk_score >= 25
-    assert result.verdict != "Likely legitimate"
+    assert result.verdict != "Low Risk"
+    assert result.threat_level.code == "suspicious"
+    assert all(category.evidence_strength != "high" for category in result.threat_categories)
     assert any(indicator.code == "ai_phishing_signal" for indicator in result.indicators)
 
 
@@ -422,7 +437,7 @@ def test_long_sharepoint_url_does_not_crash(monkeypatch) -> None:
     )
 
     assert result.url_count == 1
-    assert result.verdict == "Likely legitimate"
+    assert result.verdict == "Low Risk"
 
 
 def test_very_long_email_body_still_scans(monkeypatch) -> None:
@@ -437,7 +452,7 @@ def test_very_long_email_body_still_scans(monkeypatch) -> None:
         )
     )
 
-    assert result.verdict == "Likely legitimate"
+    assert result.verdict == "Low Risk"
 
 
 def test_outlook_safe_links_wrapper_does_not_create_false_positive(monkeypatch) -> None:
@@ -461,6 +476,103 @@ def test_outlook_safe_links_wrapper_does_not_create_false_positive(monkeypatch) 
     )
 
     assert result.risk_score < 25
-    assert result.verdict == "Likely legitimate"
+    assert result.verdict == "Low Risk"
     assert not any(indicator.code == "link_text_destination_mismatch" for indicator in result.indicators)
     assert len({(indicator.code, indicator.message) for indicator in result.indicators}) == len(result.indicators)
+
+
+def test_qr_image_attachment_is_decoded_and_url_analyzed(monkeypatch) -> None:
+    monkeypatch.setattr(analyzer, "predict_email_risk", lambda email: ("legitimate", 0.1))
+    qr = cv2.QRCodeEncoder_create().encode("http://192.0.2.10/login")
+    qr = cv2.resize(qr, None, fx=8, fy=8, interpolation=cv2.INTER_NEAREST)
+    ok, encoded = cv2.imencode(".png", qr)
+    assert ok
+    result = analyze_email(EmailAnalysisRequest(
+        subject="Scan this code",
+        sender=EmailAddress(email="sender@example.com"),
+        attachment_content_status="checked",
+        attachments=[AttachmentInfo(name="code.png", content_type="image/png", content_base64=base64.b64encode(encoded.tobytes()).decode("ascii"))],
+    ))
+    assert result.decoded_qr_links[0].href == "http://192.0.2.10/login"
+    assert any(item.code == "qr_code_link_detected" for item in result.indicators)
+    assert any(item.code == "url_uses_ip_address" for item in result.indicators)
+
+
+def test_normal_zip_is_inspected_without_risky_file(monkeypatch) -> None:
+    monkeypatch.setattr(analyzer, "predict_email_risk", lambda email: ("legitimate", 0.1))
+    result = analyze_email(EmailAnalysisRequest(
+        sender=EmailAddress(email="sender@example.com"), attachment_content_status="checked",
+        attachments=[AttachmentInfo(name="documents.zip", content_type="application/zip", content_base64=_zip_base64({"readme.txt": b"hello"}))],
+    ))
+    assert result.attachment_contents_inspected == 1
+    assert not any(item.code == "zip_contains_risky_file" for item in result.indicators)
+
+
+def test_zip_executable_and_double_extension_are_detected(monkeypatch) -> None:
+    monkeypatch.setattr(analyzer, "predict_email_risk", lambda email: ("legitimate", 0.1))
+    for name in ("run.exe", "invoice.pdf.exe"):
+        result = analyze_email(EmailAnalysisRequest(
+            sender=EmailAddress(email="sender@example.com"), attachment_content_status="checked",
+            attachments=[AttachmentInfo(name="documents.zip", content_type="application/zip", content_base64=_zip_base64({name: b"MZ"}))],
+        ))
+        assert any(item.code == "zip_contains_risky_file" for item in result.indicators)
+
+
+def test_zip_limits_and_path_traversal_fail_safely(monkeypatch) -> None:
+    monkeypatch.setattr(analyzer, "predict_email_risk", lambda email: ("legitimate", 0.1))
+    oversized = _zip_base64({"huge.txt": b"x" * (analyzer.MAX_ZIP_UNCOMPRESSED_BYTES + 1)})
+    traversal = _zip_base64({"../run.exe": b"MZ"})
+    oversized_result = analyze_email(EmailAnalysisRequest(sender=EmailAddress(email="sender@example.com"), attachments=[AttachmentInfo(name="large.zip", content_type="application/zip", content_base64=oversized)]))
+    traversal_result = analyze_email(EmailAnalysisRequest(sender=EmailAddress(email="sender@example.com"), attachments=[AttachmentInfo(name="paths.zip", content_type="application/zip", content_base64=traversal)]))
+    assert any(item.code == "zip_limits_exceeded" for item in oversized_result.indicators)
+    assert any(item.code == "zip_path_traversal" for item in traversal_result.indicators)
+
+
+def test_invalid_attachment_content_is_not_claimed_as_inspected(monkeypatch) -> None:
+    monkeypatch.setattr(analyzer, "predict_email_risk", lambda email: ("legitimate", 0.1))
+    result = analyze_email(EmailAnalysisRequest(
+        sender=EmailAddress(email="sender@example.com"), attachment_content_status="checked",
+        attachments=[AttachmentInfo(name="image.png", content_type="image/png", content_base64="not-base64")],
+    ))
+    assert result.attachment_contents_inspected == 0
+    assert result.attachment_content_status == "not_available"
+    assert any(item.code == "attachment_content_invalid" for item in result.indicators)
+
+
+def test_spoofed_approved_from_domain_is_not_trusted(monkeypatch) -> None:
+    monkeypatch.setattr(analyzer, "predict_email_risk", lambda email: ("phishing", 0.95))
+    result = analyze_email(EmailAnalysisRequest(
+        subject="Verify account", sender=EmailAddress(email="security@adu.ac.ae"), body="Sign in immediately.",
+        headers="Authentication-Results: mx.example; spf=pass smtp.mailfrom=attacker.net; dkim=pass header.d=attacker.net; dmarc=fail header.from=adu.ac.ae",
+    ))
+    assert result.authentication_status == "failed"
+    assert any(item.code in {"dmarc_failed", "auth_alignment_warning"} for item in result.indicators)
+
+
+def test_aligned_approved_sender_authentication_passes(monkeypatch) -> None:
+    monkeypatch.setattr(analyzer, "predict_email_risk", lambda email: ("legitimate", 0.1))
+    result = analyze_email(EmailAnalysisRequest(
+        sender=EmailAddress(email="security@adu.ac.ae"), body="Normal notice.",
+        headers="Authentication-Results: mx.example; spf=pass smtp.mailfrom=mail.adu.ac.ae; dkim=pass header.d=adu.ac.ae; dmarc=pass header.from=adu.ac.ae",
+    ))
+    assert result.authentication_status == "passed"
+    assert not any(item.code == "auth_alignment_warning" for item in result.indicators)
+
+
+def test_spf_pass_with_dmarc_alignment_problem_is_warning(monkeypatch) -> None:
+    monkeypatch.setattr(analyzer, "predict_email_risk", lambda email: ("legitimate", 0.1))
+    result = analyze_email(EmailAnalysisRequest(
+        sender=EmailAddress(email="security@adu.ac.ae"), body="Notice.",
+        headers="Authentication-Results: mx.example; spf=pass smtp.mailfrom=attacker.net; dkim=pass header.d=attacker.net; dmarc=pass header.from=attacker.net",
+    ))
+    assert result.authentication_status == "failed"
+    assert any(item.code == "auth_alignment_warning" for item in result.indicators)
+
+
+def test_untrusted_authentication_can_never_be_passed(monkeypatch) -> None:
+    monkeypatch.setattr(analyzer, "predict_email_risk", lambda email: ("legitimate", 0.1))
+    result = analyze_email(EmailAnalysisRequest(
+        sender=EmailAddress(email="attacker@example.net"),
+        headers="Authentication-Results: attacker.example; spf=pass dkim=pass dmarc=pass",
+    ))
+    assert result.authentication_status == "untrusted"

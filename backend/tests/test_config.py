@@ -35,3 +35,9 @@ def test_missing_indicator_mapping_is_rejected(tmp_path):
 def test_misordered_thresholds_are_rejected(tmp_path):
     value = _valid(); value["scoring"]["verdict_thresholds"]["phishing"] = 20
     with pytest.raises(ValidationError): load_settings(_write(tmp_path / "settings.json", value))
+
+
+def test_environment_overrides_organization_domains(monkeypatch, tmp_path):
+    monkeypatch.setenv("APPROVED_SENDER_DOMAINS", "mail.example.edu,students.example.edu")
+    settings = load_settings(_write(tmp_path / "settings.json", _valid()))
+    assert settings.organization.sender_domains == ["mail.example.edu", "students.example.edu"]
