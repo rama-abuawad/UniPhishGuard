@@ -11,10 +11,12 @@ services:
       - key: REQUIRE_AUTH
         value: "true"
       - key: ALLOWED_ORIGINS
-        value: https://your-addin-site.example.com
+        sync: false
       - key: ENTRA_TENANT_ID
         sync: false
       - key: ENTRA_CLIENT_ID
+        sync: false
+      - key: TRUSTED_AUTHSERV_IDS
         sync: false
       - key: HISTORY_HMAC_SECRET
         generateValue: true

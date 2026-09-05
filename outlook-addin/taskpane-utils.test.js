@@ -32,3 +32,9 @@ test("unavailable attachment bytes are not described as safe", () => {
   const status = utils.inspectionStatuses({ authentication_status: "not_available", attachment_content_status: "not_available", indicators: [] })[2];
   assert.equal(status.value, "Content inspection unavailable");
 });
+test("report displays the user-facing risk score", () => {
+  const text = utils.buildReportText({ verdict: "Low Risk", risk_score: 4, analysis_completeness: "partial", analysis_limitations: ["Headers unavailable"], threat_level: { label: "Low Risk" }, indicators: [] });
+  assert.equal(text.includes("Risk score: 4/100"), true);
+  assert.equal(text.includes("not a probability"), false);
+  assert.equal(text.includes("Headers unavailable"), true);
+});

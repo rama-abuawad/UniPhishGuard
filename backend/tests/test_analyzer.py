@@ -27,7 +27,7 @@ def test_flags_high_risk_email() -> None:
             sender=EmailAddress(name="IT", email="it@university.edu"),
             reply_to="helpdesk@example.net",
             body="Click http://192.168.1.10/login to verify your account.",
-            headers="Authentication-Results: mx.example; spf=pass dkim=pass dmarc=fail",
+            headers="Authentication-Results: spf.protection.outlook.com; spf=pass dkim=pass dmarc=fail",
             attachments=[],
         )
     )
@@ -45,7 +45,7 @@ def test_legitimate_email_stays_low_risk() -> None:
             sender=EmailAddress(name="Registrar", email="registrar@university.edu"),
             reply_to="registrar@university.edu",
             body="Your class schedule has been updated in the student portal.",
-            headers="Authentication-Results: mx.example; spf=pass dkim=pass dmarc=pass",
+            headers="Authentication-Results: spf.protection.outlook.com; spf=pass dkim=pass dmarc=pass",
             attachments=[],
         )
     )
@@ -66,14 +66,19 @@ def test_adu_tuition_email_is_not_marked_phishing() -> None:
                 "https://click.info.adu.ac.ae/open.aspx and make payment using "
                 "the secure Online Payment Gateway. Include your student ID."
             ),
-            headers="Authentication-Results: mx.example; spf=pass dkim=pass dmarc=pass",
+            headers="Authentication-Results: spf.protection.outlook.com; spf=pass dkim=pass dmarc=pass",
             attachments=[],
         )
     )
 
     assert result.risk_score < 25
     assert result.verdict == "Low Risk"
-    assert result.ai_prediction == "legitimate"
+    # The combined result may discount a text-model false positive when a
+    # configured organization sender is independently authenticated. The raw
+    # model result remains visible instead of being silently rewritten.
+    assert result.ai_prediction == "phishing"
+    assert result.ai_confidence >= result.ai_threshold
+    assert all(component.code != "ai_language" for component in result.score_breakdown)
 
 
 def test_keywords_alone_do_not_make_email_suspicious() -> None:
@@ -86,7 +91,7 @@ def test_keywords_alone_do_not_make_email_suspicious() -> None:
                 "The HR team will explain internship applications, scholarship options, "
                 "and Microsoft 365 tools during tomorrow's student workshop."
             ),
-            headers="Authentication-Results: mx.example; spf=pass dkim=pass dmarc=pass",
+            headers="Authentication-Results: spf.protection.outlook.com; spf=pass dkim=pass dmarc=pass",
             attachments=[],
         )
     )
@@ -109,7 +114,7 @@ def test_external_internship_schedule_email_stays_legitimate() -> None:
                 "the google map locations to your companies. The form url remains: "
                 "https://studentsaduac-my.sharepoint.com/Summer-2506-Internship-Visit-Schedule.xlsx"
             ),
-            headers="Authentication-Results: mx.example; spf=pass dkim=pass dmarc=pass",
+            headers="Authentication-Results: spf.protection.outlook.com; spf=pass dkim=pass dmarc=pass",
             attachments=[
                 AttachmentInfo(
                     name="Summer 2506 Internship Visit Schedule.xlsx",
@@ -133,7 +138,7 @@ def test_dkim_warning_is_clear_to_user() -> None:
             sender=EmailAddress(name="Instructor", email="instructor@university.edu"),
             reply_to="instructor@university.edu",
             body="Please review the project update before class.",
-            headers="Authentication-Results: mx.example; spf=pass dkim=fail dmarc=pass",
+            headers="Authentication-Results: spf.protection.outlook.com; spf=pass dkim=fail dmarc=pass",
             attachments=[],
         )
     )
@@ -153,7 +158,7 @@ def test_detects_university_domain_impersonation_and_categories() -> None:
                 "Your Microsoft 365 account will be locked. "
                 "Sign in at https://aduniversity-login.com/office to verify your password."
             ),
-            headers="Authentication-Results: mx.example; spf=pass dkim=pass dmarc=pass",
+            headers="Authentication-Results: spf.protection.outlook.com; spf=pass dkim=pass dmarc=pass",
             attachments=[],
         )
     )
@@ -175,7 +180,7 @@ def test_saves_scan_history(monkeypatch) -> None:
         sender=EmailAddress(name="IT", email="it@university.edu"),
         reply_to="helpdesk@example.net",
         body="Click http://192.168.1.10/login to verify your account.",
-        headers="Authentication-Results: mx.example; spf=pass dkim=pass dmarc=fail",
+        headers="Authentication-Results: spf.protection.outlook.com; spf=pass dkim=pass dmarc=fail",
         attachments=[],
     )
     result = analyze_email(email)
@@ -197,13 +202,13 @@ def test_ai_phishing_signal_cannot_score_zero(monkeypatch) -> None:
             subject="Account expiry notice",
             sender=EmailAddress(name="Support", email="support@outlook.com"),
             body="Your account expires today. Please sign in to keep access.",
-            headers="Authentication-Results: mx.example; spf=pass dkim=pass dmarc=pass",
+            headers="Authentication-Results: spf.protection.outlook.com; spf=pass dkim=pass dmarc=pass",
         )
     )
 
     assert result.risk_score >= 25
     assert result.verdict != "Low Risk"
-    assert result.threat_level.code == "suspicious"
+    assert result.threat_level.code in {"high_risk", "critical"}
     assert all(category.evidence_strength != "high" for category in result.threat_categories)
     assert any(indicator.code == "ai_phishing_signal" for indicator in result.indicators)
 
@@ -217,7 +222,7 @@ def test_visible_adu_link_pointing_elsewhere_is_high_risk(monkeypatch) -> None:
             sender=EmailAddress(name="External", email="notice@example.com"),
             body="Please open ADU Portal.",
             body_html='<a href="https://evil-login.example.com">https://students.adu.ac.ae</a>',
-            headers="Authentication-Results: mx.example; spf=pass dkim=pass dmarc=pass",
+            headers="Authentication-Results: spf.protection.outlook.com; spf=pass dkim=pass dmarc=pass",
             links=[LinkInfo(text="https://students.adu.ac.ae", href="https://evil-login.example.com")],
         )
     )
@@ -236,7 +241,7 @@ def test_free_outlook_sender_is_not_trusted_sender(monkeypatch) -> None:
             subject="ADU password check",
             sender=EmailAddress(name="ADU IT", email="adu.helpdesk@outlook.com"),
             body="ADU IT needs you to verify your password today.",
-            headers="Authentication-Results: mx.example; spf=pass dkim=pass dmarc=pass",
+            headers="Authentication-Results: spf.protection.outlook.com; spf=pass dkim=pass dmarc=pass",
         )
     )
 
@@ -251,7 +256,7 @@ def test_double_extension_is_reported_before_generic_extension(monkeypatch) -> N
             subject="Invoice",
             sender=EmailAddress(name="Vendor", email="vendor@example.com"),
             body="See attached invoice.",
-            headers="Authentication-Results: mx.example; spf=pass dkim=pass dmarc=pass",
+            headers="Authentication-Results: spf.protection.outlook.com; spf=pass dkim=pass dmarc=pass",
             attachments=[AttachmentInfo(name="invoice.pdf.exe", content_type="application/octet-stream")],
         )
     )
@@ -303,7 +308,7 @@ def test_auth_required_blocks_history(monkeypatch) -> None:
         raise AssertionError("Wrong token should be blocked")
 
 
-def test_forwarded_mixed_authentication_is_inconclusive_not_auto_phishing(monkeypatch) -> None:
+def test_forwarded_arc_failure_does_not_override_current_authentication(monkeypatch) -> None:
     monkeypatch.setattr(analyzer, "predict_email_risk", lambda email: ("legitimate", 0.80))
 
     result = analyze_email(
@@ -312,9 +317,9 @@ def test_forwarded_mixed_authentication_is_inconclusive_not_auto_phishing(monkey
             sender=EmailAddress(name="Professor", email="professor@adu.ac.ae"),
             body="Forwarded class note attached for your review.",
             headers=(
-                "ARC-Authentication-Results: i=1; mx.example; spf=fail smtp.mailfrom=old-forwarder.net; "
+                "ARC-Authentication-Results: i=1; spf.protection.outlook.com; spf=fail smtp.mailfrom=old-forwarder.net; "
                 "dkim=pass header.d=adu.ac.ae; dmarc=pass header.from=adu.ac.ae\n"
-                "Authentication-Results: mx.example; spf=pass smtp.mailfrom=adu.ac.ae; "
+                "Authentication-Results: spf.protection.outlook.com; spf=pass smtp.mailfrom=adu.ac.ae; "
                 "dkim=pass header.d=adu.ac.ae; dmarc=pass header.from=adu.ac.ae"
             ),
         )
@@ -322,7 +327,7 @@ def test_forwarded_mixed_authentication_is_inconclusive_not_auto_phishing(monkey
 
     assert result.risk_score < 25
     assert not any(indicator.code == "spf_failed" for indicator in result.indicators)
-    assert any(indicator.code == "spf_inconclusive" for indicator in result.indicators)
+    assert not any(indicator.code == "spf_inconclusive" for indicator in result.indicators)
 
 
 def test_forged_authentication_results_are_not_trusted(monkeypatch) -> None:
@@ -345,7 +350,7 @@ def test_punycode_lookalike_link_is_high_risk(monkeypatch) -> None:
             subject="ADU portal",
             sender=EmailAddress(name="Notice", email="notice@example.com"),
             body="Open https://xn--adu-login-9db.com now.",
-            headers="Authentication-Results: mx.example; spf=pass dkim=pass dmarc=pass",
+            headers="Authentication-Results: spf.protection.outlook.com; spf=pass dkim=pass dmarc=pass",
         )
     )
 
@@ -361,7 +366,7 @@ def test_url_shortener_to_login_page_is_suspicious(monkeypatch) -> None:
             subject="Password reset",
             sender=EmailAddress(name="Helpdesk", email="helpdesk@example.com"),
             body="Reset your password here https://bit.ly/adu-login today.",
-            headers="Authentication-Results: mx.example; spf=pass dkim=pass dmarc=pass",
+            headers="Authentication-Results: spf.protection.outlook.com; spf=pass dkim=pass dmarc=pass",
         )
     )
 
@@ -377,7 +382,7 @@ def test_attachment_mime_mismatch_is_flagged(monkeypatch) -> None:
             subject="Document",
             sender=EmailAddress(name="Sender", email="sender@example.com"),
             body="See attached PDF.",
-            headers="Authentication-Results: mx.example; spf=pass dkim=pass dmarc=pass",
+            headers="Authentication-Results: spf.protection.outlook.com; spf=pass dkim=pass dmarc=pass",
             attachments=[AttachmentInfo(name="document.pdf", content_type="application/x-msdownload")],
         )
     )
@@ -392,7 +397,7 @@ def test_history_is_separated_by_user(monkeypatch) -> None:
         subject="User scoped scan",
         sender=EmailAddress(name="IT", email="it@example.com"),
         body="Check this.",
-        headers="Authentication-Results: mx.example; spf=pass dkim=pass dmarc=pass",
+        headers="Authentication-Results: spf.protection.outlook.com; spf=pass dkim=pass dmarc=pass",
     )
     result = analyze_email(email)
 
@@ -432,7 +437,7 @@ def test_long_sharepoint_url_does_not_crash(monkeypatch) -> None:
             sender=EmailAddress(name="Prosper Yeng", email="prosper@example.com"),
             body=f"The form url remains: {long_url}",
             body_html=f'<a href="{long_url}">Summer 2506 Internship Visit Schedule.xlsx</a>',
-            headers="Authentication-Results: mx.example; spf=pass dkim=pass dmarc=pass",
+            headers="Authentication-Results: spf.protection.outlook.com; spf=pass dkim=pass dmarc=pass",
         )
     )
 
@@ -448,7 +453,7 @@ def test_very_long_email_body_still_scans(monkeypatch) -> None:
             subject="Long newsletter",
             sender=EmailAddress(name="Conference", email="conference@example.com"),
             body="Conference update. " * 9000,
-            headers="Authentication-Results: mx.example; spf=pass dkim=pass dmarc=pass",
+            headers="Authentication-Results: spf.protection.outlook.com; spf=pass dkim=pass dmarc=pass",
         )
     )
 
@@ -456,7 +461,9 @@ def test_very_long_email_body_still_scans(monkeypatch) -> None:
 
 
 def test_outlook_safe_links_wrapper_does_not_create_false_positive(monkeypatch) -> None:
-    monkeypatch.setattr(analyzer, "predict_email_risk", lambda email: ("phishing", 0.82))
+    # Isolate Safe Links handling from the text model. A genuinely high model
+    # probability is intentionally allowed to affect the final score.
+    monkeypatch.setattr(analyzer, "predict_email_risk", lambda email: ("legitimate", 0.03))
     safe_link = (
         "https://eur05.safelinks.protection.outlook.com/"
         "?url=https%3A%2F%2Fwww.samsung.com%2Fae%2Foffers&data=example"
@@ -470,7 +477,7 @@ def test_outlook_safe_links_wrapper_does_not_create_false_positive(monkeypatch) 
                 "External Email: This email originated from outside the organization. "
                 "Join us live and pre-order your next Galaxy device."
             ),
-            headers="Authentication-Results: mx.example; spf=pass dkim=pass dmarc=pass",
+            headers="Authentication-Results: spf.protection.outlook.com; spf=pass dkim=pass dmarc=pass",
             links=[LinkInfo(text="samsung.com", href=safe_link)],
         )
     )
@@ -543,7 +550,7 @@ def test_spoofed_approved_from_domain_is_not_trusted(monkeypatch) -> None:
     monkeypatch.setattr(analyzer, "predict_email_risk", lambda email: ("phishing", 0.95))
     result = analyze_email(EmailAnalysisRequest(
         subject="Verify account", sender=EmailAddress(email="security@adu.ac.ae"), body="Sign in immediately.",
-        headers="Authentication-Results: mx.example; spf=pass smtp.mailfrom=attacker.net; dkim=pass header.d=attacker.net; dmarc=fail header.from=adu.ac.ae",
+        headers="Authentication-Results: spf.protection.outlook.com; spf=pass smtp.mailfrom=attacker.net; dkim=pass header.d=attacker.net; dmarc=fail header.from=adu.ac.ae",
     ))
     assert result.authentication_status == "failed"
     assert any(item.code in {"dmarc_failed", "auth_alignment_warning"} for item in result.indicators)
@@ -553,7 +560,7 @@ def test_aligned_approved_sender_authentication_passes(monkeypatch) -> None:
     monkeypatch.setattr(analyzer, "predict_email_risk", lambda email: ("legitimate", 0.1))
     result = analyze_email(EmailAnalysisRequest(
         sender=EmailAddress(email="security@adu.ac.ae"), body="Normal notice.",
-        headers="Authentication-Results: mx.example; spf=pass smtp.mailfrom=mail.adu.ac.ae; dkim=pass header.d=adu.ac.ae; dmarc=pass header.from=adu.ac.ae",
+        headers="Authentication-Results: spf.protection.outlook.com; spf=pass smtp.mailfrom=mail.adu.ac.ae; dkim=pass header.d=adu.ac.ae; dmarc=pass header.from=adu.ac.ae",
     ))
     assert result.authentication_status == "passed"
     assert not any(item.code == "auth_alignment_warning" for item in result.indicators)
@@ -563,7 +570,7 @@ def test_spf_pass_with_dmarc_alignment_problem_is_warning(monkeypatch) -> None:
     monkeypatch.setattr(analyzer, "predict_email_risk", lambda email: ("legitimate", 0.1))
     result = analyze_email(EmailAnalysisRequest(
         sender=EmailAddress(email="security@adu.ac.ae"), body="Notice.",
-        headers="Authentication-Results: mx.example; spf=pass smtp.mailfrom=attacker.net; dkim=pass header.d=attacker.net; dmarc=pass header.from=attacker.net",
+        headers="Authentication-Results: spf.protection.outlook.com; spf=pass smtp.mailfrom=attacker.net; dkim=pass header.d=attacker.net; dmarc=pass header.from=attacker.net",
     ))
     assert result.authentication_status == "failed"
     assert any(item.code == "auth_alignment_warning" for item in result.indicators)
@@ -576,3 +583,165 @@ def test_untrusted_authentication_can_never_be_passed(monkeypatch) -> None:
         headers="Authentication-Results: attacker.example; spf=pass dkim=pass dmarc=pass",
     ))
     assert result.authentication_status == "untrusted"
+
+
+def test_later_spoofed_authentication_pass_cannot_cancel_first_failure(monkeypatch) -> None:
+    monkeypatch.setattr(analyzer, "predict_email_risk", lambda email: ("legitimate", 0.05))
+    result = analyze_email(EmailAnalysisRequest(
+        sender=EmailAddress(email="attacker@example.net"),
+        headers=(
+            "Authentication-Results: spf.protection.outlook.com; spf=fail smtp.mailfrom=example.net; "
+            "dkim=fail header.d=example.net; dmarc=fail header.from=example.net\n"
+            "Authentication-Results: spf.protection.outlook.com; spf=pass smtp.mailfrom=example.net; "
+            "dkim=pass header.d=example.net; dmarc=pass header.from=example.net"
+        ),
+    ))
+    assert result.authentication_status == "failed"
+    assert any(item.code == "dmarc_failed" for item in result.indicators)
+
+
+def test_authentication_status_uses_same_authoritative_header_as_indicators(monkeypatch) -> None:
+    monkeypatch.setattr(analyzer, "predict_email_risk", lambda email: ("legitimate", 0.05))
+    result = analyze_email(EmailAnalysisRequest(
+        sender=EmailAddress(email="sender@example.net"),
+        headers=(
+            "Authentication-Results: spf.protection.outlook.com; spf=neutral dkim=none dmarc=none\n"
+            "Authentication-Results: spf.protection.outlook.com; spf=pass dkim=pass dmarc=pass"
+        ),
+    ))
+    assert result.authentication_status == "not_available"
+
+
+def test_moderate_phishing_probability_contributes_continuously(monkeypatch) -> None:
+    monkeypatch.setattr(analyzer, "predict_email_risk", lambda email: ("phishing", 0.60))
+    result = analyze_email(EmailAnalysisRequest(
+        subject="Review this account message",
+        sender=EmailAddress(email="sender@example.net"),
+        body="Please review the account message.",
+        headers="Authentication-Results: spf.protection.outlook.com; spf=pass dkim=pass dmarc=pass",
+    ))
+    ai_component = next(component for component in result.score_breakdown if component.code == "ai_language")
+    assert 0 < ai_component.score < 25
+
+
+def test_missing_headers_report_partial_analysis_without_adding_risk(monkeypatch) -> None:
+    monkeypatch.setattr(analyzer, "predict_email_risk", lambda email: ("legitimate", 0.05))
+    result = analyze_email(EmailAnalysisRequest(
+        subject="Ordinary note",
+        sender=EmailAddress(email="sender@example.net"),
+        body="See you in class.",
+        headers="",
+        headers_status="not_available",
+    ))
+    assert result.risk_score == 0
+    assert result.analysis_completeness == "partial"
+    assert result.analysis_limitations
+
+
+def test_reply_to_subdomain_of_same_registrable_domain_is_not_mismatch(monkeypatch) -> None:
+    monkeypatch.setattr(analyzer, "predict_email_risk", lambda email: ("legitimate", 0.05))
+    result = analyze_email(EmailAnalysisRequest(
+        subject="Ticket update",
+        sender=EmailAddress(email="support@mail.example.co.uk"),
+        reply_to="helpdesk@example.co.uk",
+        body="Your support ticket was updated.",
+        headers="Authentication-Results: spf.protection.outlook.com; spf=pass dkim=pass dmarc=pass",
+    ))
+    assert not any(item.code == "reply_to_mismatch" for item in result.indicators)
+
+
+def test_very_high_model_risk_is_not_hidden_for_trusted_sender(monkeypatch) -> None:
+    monkeypatch.setattr(analyzer, "predict_email_risk", lambda email: ("phishing", 0.95))
+    result = analyze_email(EmailAnalysisRequest(
+        subject="Urgent password request",
+        sender=EmailAddress(email="security@adu.ac.ae"),
+        body="Send your password immediately to keep access.",
+        headers=(
+            "Authentication-Results: spf.protection.outlook.com; spf=pass smtp.mailfrom=adu.ac.ae; "
+            "dkim=pass header.d=adu.ac.ae; dmarc=pass header.from=adu.ac.ae"
+        ),
+    ))
+    assert result.risk_score >= 25
+    assert result.verdict != "Low Risk"
+
+
+def test_uninspected_attachment_is_reported_as_partial(monkeypatch) -> None:
+    monkeypatch.setattr(analyzer, "predict_email_risk", lambda email: ("legitimate", 0.05))
+    result = analyze_email(EmailAnalysisRequest(
+        sender=EmailAddress(email="sender@example.net"),
+        headers="Authentication-Results: spf.protection.outlook.com; spf=pass dkim=pass dmarc=pass",
+        attachment_content_status="not_available",
+        attachments=[AttachmentInfo(name="document.pdf", content_type="application/pdf", size=6_000_000)],
+    ))
+    assert result.analysis_completeness == "partial"
+    assert "0 of 1" in result.analysis_limitations[0]
+
+
+def test_external_conference_partner_email_does_not_trigger_impersonation(monkeypatch) -> None:
+    """Regression for the EDMSET conference false positive reported from Outlook."""
+    monkeypatch.setattr(analyzer, "predict_email_risk", lambda email: ("legitimate", 0.05))
+    result = analyze_email(EmailAnalysisRequest(
+        subject="3rd EDMSET Conference | Publish in the Scopus indexed Series",
+        sender=EmailAddress(name="EDMSET Conference", email="edmset@ierekconferences.com"),
+        body=(
+            "Building on the success of our previous two editions, which brought together over "
+            "400 attendees from more than 60 countries, we invite you to participate in the 3rd "
+            "Edition of the International Conference on Environmental Design, Material Science, "
+            "and Engineering Technologies. Dates: 12-14 May 2026. Abu Dhabi, United Arab Emirates. "
+            "In collaboration with: Abu Dhabi University & Istituto Marangoni."
+        ),
+        headers="Authentication-Results: spf.protection.outlook.com; spf=pass dkim=pass dmarc=pass",
+        links=[LinkInfo(
+            text="Conference image",
+            href="https://fshrv-cmpzourl.maillist-manage.com/click/12345",
+        )],
+    ))
+    false_positive_codes = {
+        "suspicious_url_domain",
+        "untrusted_university_branding",
+        "fake_university_service",
+    }
+    assert not (false_positive_codes & {item.code for item in result.indicators})
+    assert not ({"fake_hr", "microsoft_login_scam"} & {item.code for item in result.threat_categories})
+    assert result.risk_score == 0
+    assert result.verdict == "Low Risk"
+
+
+def test_short_service_terms_do_not_match_inside_words() -> None:
+    assert "HR" not in analyzer._matched_university_services("three hundred conference attendees")
+    assert "HR" in analyzer._matched_university_services("please contact the HR office")
+
+
+def test_normal_long_hyphenated_campaign_domain_is_not_suspicious(monkeypatch) -> None:
+    monkeypatch.setattr(analyzer, "predict_email_risk", lambda email: ("legitimate", 0.05))
+    result = analyze_email(EmailAnalysisRequest(
+        sender=EmailAddress(email="news@example.com"),
+        body="Conference announcement",
+        headers="Authentication-Results: spf.protection.outlook.com; spf=pass dkim=pass dmarc=pass",
+        links=[LinkInfo(text="Read more", href="https://fshrv-cmpzourl.maillist-manage.com/click/123")],
+    ))
+    assert not any(item.code == "suspicious_url_domain" for item in result.indicators)
+
+
+def test_very_high_phishing_probability_reaches_likely_phishing_without_rule_support(monkeypatch) -> None:
+    """Regression for the Outlook Security Verification Test message."""
+    monkeypatch.setattr(analyzer, "predict_email_risk", lambda email: ("phishing", 1.0))
+    safe_link = (
+        "https://eur05.safelinks.protection.outlook.com/"
+        "?url=https%3A%2F%2Faccount-review.example.com%2Faccount-review&data=example"
+    )
+    result = analyze_email(EmailAnalysisRequest(
+        subject="Security Verification Test",
+        sender=EmailAddress(name="Tae Yo", email="ramadiab3@gmail.com"),
+        body=(
+            "Dear Student, A security review found unusual activity associated with your university account. "
+            "Please review your account status using the link below. This message requires your attention "
+            "within 24 hours to avoid temporary access restrictions."
+        ),
+        headers="Authentication-Results: attacker.example; spf=pass dkim=pass dmarc=pass",
+        links=[LinkInfo(text=safe_link, href=safe_link)],
+    ))
+    assert result.risk_score >= 55
+    assert result.verdict in {"Likely phishing", "High-risk phishing"}
+    assert any(category.code == "credential_theft" for category in result.threat_categories)
+    assert not any(category.code == "microsoft_login_scam" for category in result.threat_categories)

@@ -65,7 +65,10 @@ def predict_email_risk(email: EmailAnalysisRequest) -> tuple[str, float]:
     threshold = _model_threshold()
     prediction = "phishing" if phishing_probability >= threshold else "legitimate"
 
-    return prediction, round(phishing_probability, 2)
+    # Keep the calibrated probability at full precision for scoring. Presentation
+    # layers may round it, but scoring rounded probabilities creates artificial
+    # jumps around the decision threshold.
+    return prediction, phishing_probability
 
 
 def explain_email_risk(email: EmailAnalysisRequest) -> list[str]:

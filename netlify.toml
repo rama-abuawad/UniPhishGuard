@@ -1,7 +1,12 @@
 [build]
-  publish = "outlook-addin"
+  base = "outlook-addin"
+  command = "npm ci && npm run build"
+  publish = "dist"
 
 [[headers]]
   for = "/*"
   [headers.values]
     Cache-Control = "no-store"
+    Content-Security-Policy = "default-src 'self'; script-src 'self' https://appsforoffice.microsoft.com https://ajax.aspnetcdn.com; style-src 'self' 'unsafe-inline'; connect-src https:; img-src 'self' data:; object-src 'none'; base-uri 'none'"
+    Referrer-Policy = "no-referrer"
+    X-Content-Type-Options = "nosniff"

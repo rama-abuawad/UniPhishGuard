@@ -71,7 +71,7 @@ flowchart LR
 2. FastAPI validates the request and passes it to the analyzer.
 3. The text model estimates how closely the message resembles labelled phishing email.
 4. Security rules inspect concrete technical and social-engineering indicators.
-5. Category caps combine corroborating evidence into a risk score from 0 to 100.
+5. Category caps combine corroborating evidence into a 0-to-100 evidence index. This index is not a phishing probability; the calibrated text-model probability remains a separate technical detail.
 6. The add-in displays the verdict, strongest reasons, recommended actions, and optional technical details.
 7. A redacted result is added to the user's limited scan history.
 
@@ -153,7 +153,7 @@ From the repository root, open a new Command Prompt window:
 
 ```bat
 cd backend
-python -m uvicorn app.main:app --host localhost --port 8000 --ssl-certfile "%USERPROFILE%\.office-addin-dev-certs\localhost.crt" --ssl-keyfile "%USERPROFILE%\.office-addin-dev-certs\localhost.key"
+powershell -NoProfile -ExecutionPolicy Bypass -File start-local.ps1
 ```
 
 Keep the window open and verify the service at [https://localhost:8000/health](https://localhost:8000/health).
@@ -265,7 +265,7 @@ URL checks are heuristic. UniPhishGuard does not claim live domain reputation an
 
 ## Privacy and safety
 
-- SQLite stores only a redacted subject, pseudonymized sender, score, verdict, and scan time.
+- SQLite stores only a shortened subject with links and email addresses removed, pseudonymized sender and user identifiers, score, verdict, and scan time.
 - Full bodies, headers, attachment contents, tokens, credentials, and raw sender addresses are not stored in history.
 - History is scoped per user and bounded by age and item-count limits.
 - **Report to IT** opens a draft; the user reviews, addresses, and sends it manually.
@@ -285,6 +285,7 @@ python -m compileall -q app tests train_model.py prepare_training_data.py evalua
 
 cd ..\outlook-addin
 node --check taskpane.js
+node --check office-bootstrap.js
 npm test
 npm run validate
 ```
@@ -299,10 +300,16 @@ Generate production frontend configuration and a production manifest without edi
 
 ```bat
 cd outlook-addin
-npm run configure:production -- --app-url https://addin.example.edu --api-url https://api.example.edu
+npm run configure:production -- --app-url https://addin.example.edu --api-url https://api.example.edu --client-id 00000000-0000-4000-8000-000000000000
 ```
 
-This creates `dist/manifest.xml` and `dist/config.js`. Replace example origins with approved HTTPS services, configure Microsoft Entra, validate the generated manifest, and distribute it through the university's Microsoft 365 administration workflow.
+This creates a complete deployable add-in under `dist/addin/`, plus `dist/manifest.xml` with the `WebApplicationInfo` required by Office SSO. Replace example values with approved HTTPS services and the Microsoft Entra application client ID, validate the generated manifest, and distribute it through the university's Microsoft 365 administration workflow. If the Entra application uses a non-default Application ID URI, also pass `--resource api://your-registered-resource`.
+
+Netlify runs the same build automatically. Configure `UNIPHISHGUARD_APP_URL`, `UNIPHISHGUARD_API_URL`, and `ENTRA_CLIENT_ID` in Netlify; configure `ENTRA_RESOURCE` too when the application uses a non-default Application ID URI. The build fails instead of publishing a localhost-configured add-in when these values are absent or invalid.
+
+Set the backend `ALLOWED_ORIGINS` to the exact add-in HTTPS origin. Production startup rejects an empty value, wildcard, HTTP URL, path, or placeholder domain so a permissive or unfinished CORS configuration cannot be deployed accidentally.
+
+Set `TRUSTED_AUTHSERV_IDS` to the exact `authserv-id` values added by the university's verified inbound mail gateways. Production startup rejects missing or placeholder values rather than trusting sample infrastructure.
 
 `render.yaml` describes the FastAPI service. The included process-local rate limiter is appropriate for a local demonstration; multi-instance production deployment requires a shared limiter such as Redis.
 
@@ -312,6 +319,9 @@ This creates `dist/manifest.xml` and `dist/config.js`. Replace example origins w
 - Public research corpora may contain historical bias or labelling errors.
 - Some Outlook clients do not expose internet headers or attachment bytes; the UI reports these capabilities as unavailable.
 - URL rules identify suspicious structure but do not provide live reputation results.
+- Attachment inspection is bounded and is not a malware sandbox; encrypted archives and files unavailable through Office.js cannot be fully inspected.
+- SQLite history and the in-process rate limiter are designed for a single API instance. A multi-instance deployment needs shared storage and rate limiting.
+- The current Office SSO integration depends on host support. A production rollout should test every supported Outlook client and migrate to Microsoft nested app authentication where required.
 - No detector can guarantee zero false positives or zero false negatives.
 
 UniPhishGuard should support user and IT review alongside—not replace—the university secure email gateway and incident-response process.

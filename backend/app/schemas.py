@@ -1,5 +1,7 @@
 """Pydantic schemas for the UniPhishGuard API and persistence layer."""
 
+from urllib.parse import urlsplit
+
 from pydantic import BaseModel, Field, field_validator
 
 MAX_SUBJECT_LENGTH = 998
@@ -33,6 +35,16 @@ class LinkInfo(BaseModel):
     def validate_url_scheme(cls, value: str) -> str:
         if not value.lower().startswith(("http://", "https://")):
             raise ValueError("Link URL must use http or https.")
+        if any(ord(character) < 32 or character.isspace() for character in value):
+            raise ValueError("Link URL must not contain whitespace or control characters.")
+        try:
+            parsed = urlsplit(value)
+            hostname = parsed.hostname
+            parsed.port
+        except ValueError as error:
+            raise ValueError("Link URL is malformed.") from error
+        if not parsed.netloc or not hostname:
+            raise ValueError("Link URL must contain a hostname.")
         return value
 
 
@@ -83,6 +95,8 @@ class EmailAnalysisResponse(BaseModel):
     scanned_at: str | None = None
     verdict: str
     risk_score: int = Field(ge=0, le=100)
+    score_type: str = "evidence_index"
+    score_version: str = "2.0"
     threat_level: ThreatLevel
     threat_categories: list[ThreatCategory] = Field(default_factory=list)
     ai_prediction: str
@@ -98,6 +112,8 @@ class EmailAnalysisResponse(BaseModel):
     attachment_content_status: str = "not_requested"
     authentication_headers_status: str = "not_available"
     authentication_status: str = "not_available"
+    analysis_completeness: str = "partial"
+    analysis_limitations: list[str] = Field(default_factory=list)
     decoded_qr_links: list[LinkInfo] = Field(default_factory=list)
     indicators: list[Indicator]
     recommended_actions: list[str]

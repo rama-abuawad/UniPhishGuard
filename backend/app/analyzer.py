@@ -14,6 +14,10 @@ from html import unescape
 from ipaddress import ip_address
 from urllib.parse import parse_qs, unquote, urlparse
 
+# Limit decoded image size before OpenCV is imported. Compressed image files can
+# otherwise expand to excessive memory during QR inspection.
+os.environ.setdefault("OPENCV_IO_MAX_IMAGE_PIXELS", "25000000")
+
 import cv2
 import numpy as np
 
@@ -74,7 +78,19 @@ THREAT_CATEGORY_RULES = (
     (
         "credential_theft",
         "Credential Theft",
-        ("password", "verify your account", "login", "sign in", "credentials", "account locked", "mfa"),
+        (
+            "password",
+            "verify your account",
+            "login",
+            "sign in",
+            "credentials",
+            "account locked",
+            "unusual activity",
+            "review your account",
+            "account status",
+            "access restrictions",
+            "mfa",
+        ),
     ),
     (
         "business_email_compromise",
@@ -178,27 +194,24 @@ def analyze_email(email: EmailAnalysisRequest) -> EmailAnalysisResponse:
     ai_prediction, ai_confidence = predict_email_risk(email)
     ai_evidence = explain_email_risk(email)
     trusted_context = _has_trusted_sender_context(email)
-    # Text alone can resemble phishing in legitimate account, payment and
-    # password notices. A verified approved sender is strong independent
-    # evidence, so suppress only moderate text-only labels. High-confidence ML
-    # results and all rule-based URL/header/attachment findings remain active.
-    if trusted_context and ai_prediction == "phishing" and ai_confidence < 0.75:
-        ai_prediction = "legitimate"
-    if ai_prediction == "phishing" and not trusted_context and ai_confidence >= 0.75:
+    # Preserve the model's prediction for transparency. Trust context affects
+    # the combined evidence score, but must not rewrite what the model returned.
+    if ai_prediction == "phishing" and not trusted_context:
         indicators.append(
             Indicator(
                 code="ai_phishing_signal",
-                severity="medium",
+                severity="high" if ai_confidence >= 0.95 else "medium" if ai_confidence >= 0.75 else "low",
                 message=f"AI text analysis found phishing-like wording ({round(ai_confidence * 100)}%).",
             )
         )
 
     categories = _detect_threat_categories(email, indicators)
-    score, score_breakdown = _score(indicators, ai_prediction, ai_confidence)
+    score, score_breakdown = _score(indicators, ai_prediction, ai_confidence, trusted_context=trusted_context)
     attachment_contents_inspected = len(attachment_hashes)
     attachment_content_status = email.attachment_content_status
     if email.attachments and attachment_contents_inspected < len(email.attachments) and attachment_content_status == "checked":
         attachment_content_status = "partial" if attachment_contents_inspected else "not_available"
+    analysis_limitations = _analysis_limitations(email, attachment_contents_inspected)
     return EmailAnalysisResponse(
         verdict=_verdict(score),
         risk_score=score,
@@ -217,6 +230,8 @@ def analyze_email(email: EmailAnalysisRequest) -> EmailAnalysisResponse:
         attachment_content_status=attachment_content_status,
         authentication_headers_status=email.headers_status,
         authentication_status=_authentication_status(email.headers, email.headers_status, indicators),
+        analysis_completeness="complete" if not analysis_limitations else "partial",
+        analysis_limitations=analysis_limitations,
         decoded_qr_links=qr_links,
         indicators=indicators,
         recommended_actions=_recommended_actions(score, indicators),
@@ -227,7 +242,7 @@ def _check_sender_reply_to(email: EmailAnalysisRequest) -> list[Indicator]:
     sender_domain = _domain_from_address(str(email.sender.email))
     reply_domain = _domain_from_address(email.reply_to or "")
 
-    if sender_domain and reply_domain and sender_domain != reply_domain:
+    if sender_domain and reply_domain and not _same_registrable_domain(sender_domain, reply_domain):
         return [
             Indicator(
                 code="reply_to_mismatch",
@@ -268,7 +283,11 @@ def _check_authentication_results(headers: str, status: str = "checked", visible
             severity="low",
             message="Authentication results were present but were not issued by a configured trusted mail server.",
         )]
-    auth_blocks = trusted_blocks
+    # The first trusted non-ARC Authentication-Results field is the receiving
+    # boundary's authoritative result. Combining every matching field allowed
+    # an older or injected pass result to dilute a current failure.
+    authoritative = _authoritative_authentication_block(trusted_blocks)
+    auth_blocks = [authoritative] if authoritative else []
     parsed_results = _parse_authentication_results(auth_blocks)
 
     for protocol in ("spf", "dkim", "dmarc"):
@@ -427,7 +446,10 @@ def _check_urls(email: EmailAnalysisRequest, links: list[LinkInfo]) -> list[Indi
                     message=f"URL uses an internationalized/punycode domain: {host}",
                 )
             )
-        elif host.count("-") >= 2 or len(host) > 45 or _looks_like_university_domain(host):
+        # Long and hyphenated hostnames are normal for mailing-list and CDN
+        # providers. Flag only organization lookalikes here; the concrete IP,
+        # punycode, user-info, port and display-mismatch checks above remain.
+        elif _looks_like_university_domain(host):
             indicators.append(
                 Indicator(
                     code="suspicious_url_domain",
@@ -469,7 +491,7 @@ def _authentication_result_blocks(headers: str) -> list[str]:
             if current:
                 blocks.append(" ".join(current))
             current = [line]
-        elif current and (line.startswith((" ", "\t")) or "=" in line):
+        elif current and line.startswith((" ", "\t")):
             current.append(line.strip())
         elif current:
             blocks.append(" ".join(current))
@@ -510,6 +532,13 @@ def _trusted_authentication_block(block: str) -> bool:
     return any(authserv_id == trusted or authserv_id.endswith(f".{trusted}") for trusted in TRUSTED_AUTHSERV_IDS)
 
 
+def _authoritative_authentication_block(blocks: list[str]) -> str:
+    return next(
+        (block for block in blocks if block.lower().startswith("authentication-results:")),
+        blocks[0] if blocks else "",
+    )
+
+
 def _has_auth_alignment_problem(blocks: list[str], visible_from_domain: str = "") -> bool:
     parsed = _parse_authentication_results(blocks)
     for protocol in ("dmarc", "dkim", "spf"):
@@ -534,7 +563,8 @@ def _authentication_status(headers: str, status: str, indicators: list[Indicator
     if any(code.endswith("_failed") or code == "auth_alignment_warning" for code in codes):
         return "failed"
     trusted = [block for block in _authentication_result_blocks(headers) if _trusted_authentication_block(block)]
-    parsed = _parse_authentication_results(trusted)
+    authoritative = _authoritative_authentication_block(trusted)
+    parsed = _parse_authentication_results([authoritative] if authoritative else [])
     if any(result["result"] == "pass" for result in parsed["dmarc"]) and any(
         result["result"] == "pass" for protocol in ("spf", "dkim") for result in parsed[protocol]
     ):
@@ -720,8 +750,17 @@ def _check_university_impersonation(email: EmailAnalysisRequest) -> list[Indicat
             )
         )
 
-    has_untrusted_brand = not _is_approved_sender_domain(sender_domain) and any(
-        term in text_without_urls for term in UNIVERSITY_BRAND_TERMS
+    brand_mentioned = any(_contains_term(text_without_urls, term) for term in UNIVERSITY_BRAND_TERMS)
+    sender_claims_brand = any(_contains_term((email.sender.name or "").lower(), term) for term in UNIVERSITY_BRAND_TERMS)
+    action_requested = _has_account_action_terms(text_without_urls)
+    # External conference, partner and news messages may legitimately mention
+    # the university. A mention becomes impersonation evidence only when the
+    # sender claims the brand, a lookalike domain is present, or account action
+    # is requested.
+    has_untrusted_brand = (
+        not _is_approved_sender_domain(sender_domain)
+        and brand_mentioned
+        and (sender_claims_brand or bool(suspicious_domains) or action_requested)
     )
     if has_untrusted_brand:
         indicators.append(
@@ -732,11 +771,11 @@ def _check_university_impersonation(email: EmailAnalysisRequest) -> list[Indicat
             )
         )
 
-    impersonated_services = _matched_university_services(text)
+    impersonated_services = _matched_university_services(text_without_urls)
     if (
         impersonated_services
         and not _has_trusted_sender_context(email)
-        and (suspicious_domains or has_untrusted_brand or _has_account_action_terms(text))
+        and (suspicious_domains or has_untrusted_brand or action_requested)
     ):
         indicators.append(
             Indicator(
@@ -753,17 +792,20 @@ def _detect_threat_categories(
     email: EmailAnalysisRequest,
     indicators: list[Indicator],
 ) -> list[ThreatCategory]:
-    text = _email_text(email)
+    # URL infrastructure names (for example protection.outlook.com in a Safe
+    # Links wrapper) are technical data, not claims made by the message text.
+    text = URL_RE.sub(" ", _email_text(email))
     categories: list[ThreatCategory] = []
     indicator_codes = {indicator.code for indicator in indicators}
     category_context = any(
-        indicator.code != "ai_phishing_signal" and indicator.severity in {"medium", "high"}
+        indicator.severity in {"medium", "high"}
+        and (indicator.code != "ai_phishing_signal" or indicator.severity == "high")
         for indicator in indicators
     )
 
     if category_context:
         for code, label, keywords in THREAT_CATEGORY_RULES:
-            matched = [keyword for keyword in keywords if keyword in text]
+            matched = [keyword for keyword in keywords if _contains_term(text, keyword)]
             if matched:
                 categories.append(
                     ThreatCategory(
@@ -838,17 +880,23 @@ def _matched_university_services(text: str) -> list[str]:
     return [
         labels[code]
         for code, keywords in UNIVERSITY_SERVICE_TERMS.items()
-        if any(keyword in text for keyword in keywords)
+        if any(_contains_term(text, keyword) for keyword in keywords)
     ]
 
 
 def _looks_like_university_domain(domain: str) -> bool:
-    normalized = re.sub(r"[^a-z0-9]", "", domain.lower())
-    if normalized.startswith("adu") or "aduniversity" in normalized or "abudhabiuniversity" in normalized:
+    lowered = domain.lower()
+    normalized = re.sub(r"[^a-z0-9]", "", lowered)
+    if (
+        re.search(r"(?:^|[.-])adu(?:[.-]|$)", lowered)
+        or normalized.startswith("aduniversity")
+        or "abudhabiuniversity" in normalized
+    ):
         return True
 
     university_words = ("help", "support", "login", "portal", "blackboard", "student", "hr")
-    return "adu" in normalized and any(word in normalized for word in university_words)
+    labels = [label for label in re.split(r"[.-]", lowered) if label]
+    return "adu" in labels and any(word in labels for word in university_words)
 
 
 def _has_account_action_terms(text: str) -> bool:
@@ -861,13 +909,21 @@ def _has_account_action_terms(text: str) -> bool:
         "update your account",
         "confirm your account",
     )
-    return any(term in text for term in action_terms)
+    return any(_contains_term(text, term) for term in action_terms)
+
+
+def _contains_term(text: str, term: str) -> bool:
+    """Match a phrase as words, not as a substring inside an ordinary word."""
+    escaped = re.escape(term.lower()).replace(r"\ ", r"\s+")
+    return bool(re.search(rf"(?<![a-z0-9]){escaped}(?![a-z0-9])", text.lower()))
 
 
 def _score(
     indicators: list[Indicator],
     ai_prediction: str,
     ai_confidence: float,
+    *,
+    trusted_context: bool = False,
 ) -> tuple[int, list[ScoreComponent]]:
     indicator_weights = SCORING_CONFIG["indicator_weights"]
     indicator_categories = SCORING_CONFIG["indicator_categories"]
@@ -878,13 +934,21 @@ def _score(
         indicator.code != "ai_phishing_signal" and indicator.severity in {"medium", "high"}
         for indicator in indicators
     )
-    if ai_prediction == "phishing" and ai_confidence >= 0.75:
-        if corroborated:
-            ai_score = round(SCORING_CONFIG["ai_phishing_weight"] * ai_confidence)
+    if ai_prediction == "phishing":
+        threshold = model_threshold()
+        # Smoothly award points over the calibrated model threshold. The old
+        # 0.75 gate discarded valid 0.50-0.74 phishing predictions entirely.
+        distance = max(0.0, min(1.0, (ai_confidence - threshold) / max(1e-9, 1.0 - threshold)))
+        ai_score = round(5 + (SCORING_CONFIG["ai_phishing_weight"] - 5) * distance)
+        if ai_confidence >= 0.95:
+            ai_score = max(ai_score, SCORING_CONFIG["verdict_thresholds"]["phishing"])
         elif ai_confidence >= 0.90:
-            ai_score = SCORING_CONFIG["verdict_thresholds"]["suspicious"]
-        else:
-            ai_score = min(12, SCORING_CONFIG["verdict_thresholds"]["suspicious"] - 1)
+            ai_score = max(ai_score, SCORING_CONFIG["verdict_thresholds"]["suspicious"])
+        # Verified organization mail controls ordinary-notice false positives,
+        # but never cancels corroborating technical evidence or a very-high-
+        # confidence text result.
+        if trusted_context and not corroborated and ai_confidence < 0.90:
+            ai_score = 0
         raw_components["ai_language"] += ai_score
 
     for indicator in indicators:
@@ -977,6 +1041,17 @@ def _has_trusted_sender_context(email: EmailAnalysisRequest) -> bool:
         return False
     indicators = _check_authentication_results(email.headers, email.headers_status, sender_domain)
     return _authentication_status(email.headers, email.headers_status, indicators) == "passed"
+
+
+def _analysis_limitations(email: EmailAnalysisRequest, attachment_contents_inspected: int) -> list[str]:
+    limitations: list[str] = []
+    if email.headers_status != "checked" or not email.headers.strip():
+        limitations.append("Sender authentication headers were unavailable, so sender identity could not be fully verified.")
+    if email.attachments and attachment_contents_inspected < len(email.attachments):
+        limitations.append(
+            f"Only {attachment_contents_inspected} of {len(email.attachments)} attachment contents were inspected."
+        )
+    return limitations
 
 
 def _url_hosts(email: EmailAnalysisRequest) -> set[str]:

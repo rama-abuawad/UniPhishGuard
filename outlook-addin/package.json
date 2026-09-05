@@ -4,10 +4,11 @@
   "private": true,
   "description": "Outlook task-pane add-in for UniPhishGuard.",
   "scripts": {
-    "certs": "office-addin-dev-certs install",
+    "certs": "powershell -NoProfile -ExecutionPolicy Bypass -File ..\\backend\\setup-local-cert.ps1",
     "start": "http-server . -S -C %USERPROFILE%\\.office-addin-dev-certs\\localhost.crt -K %USERPROFILE%\\.office-addin-dev-certs\\localhost.key -p 3000 -c-1",
-    "test": "node --test taskpane-utils.test.js",
+    "test": "node --test",
     "validate": "office-addin-manifest validate manifest.xml",
+    "build": "node configure-production.js",
     "configure:production": "node configure-production.js",
     "sideload": "office-addin-debugging start manifest.xml desktop --no-debug",
     "stop": "office-addin-debugging stop manifest.xml"
@@ -17,5 +18,9 @@
     "office-addin-debugging": "^6.1.2",
     "office-addin-dev-certs": "^2.0.10",
     "office-addin-manifest": "^2.1.6"
+  },
+  "overrides": {
+    "adm-zip": "0.6.0",
+    "qs": "6.16.0"
   }
 }

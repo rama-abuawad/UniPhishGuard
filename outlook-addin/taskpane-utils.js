@@ -70,7 +70,9 @@
       : "- No specific category detected";
     const important = (report.indicators || []).filter((indicator) => indicator.code !== "ai_phishing_signal" && ["high", "medium"].includes(indicator.severity));
     const indicators = important.length ? important.map((indicator) => `- ${indicator.message}`).join("\n") : "- No major indicators found";
-    return ["UniPhishGuard report", `Scan ID: ${report.scan_id || "Unavailable"}`, `Verdict: ${report.verdict}`, `Threat level: ${threatLevel.label}`, `Risk score: ${report.risk_score}/100`, "Threat categories:", categories, "Indicators:", indicators].join("\n");
+    const completeness = report.analysis_completeness || "partial";
+    const limitations = (report.analysis_limitations || []).map((item) => `- ${item}`).join("\n") || "- None reported";
+    return ["UniPhishGuard report", `Scan ID: ${report.scan_id || "Unavailable"}`, `Verdict: ${report.verdict}`, `Threat level: ${threatLevel.label}`, `Risk score: ${report.risk_score}/100`, `Analysis completeness: ${completeness}`, "Analysis limitations:", limitations, "Threat categories:", categories, "Indicators:", indicators].join("\n");
   }
 
   return { attachmentCanBeRetrieved, base64Content, buildReportText, categoryEvidence, escapeHtml, inspectionStatuses, normalizeThreatLevel, verdictClassName };

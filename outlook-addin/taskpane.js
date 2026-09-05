@@ -65,20 +65,21 @@ async function scanCurrentEmail() {
   setLoading(true);
 
   try {
-    const apiBaseUrl = await findBackend();
     const email = await getCurrentEmail();
-    const response = await fetch(`${apiBaseUrl}/analyze-email`, {
+    const apiBaseUrl = await findBackend();
+    const response = await fetchWithTimeout(`${apiBaseUrl}/api/v1/analyze-email`, {
       method: "POST",
       headers: await apiHeaders(),
       body: JSON.stringify(email),
-    });
+    }, 90_000);
 
     if (!response.ok) {
-      throw makeHttpError(response.status);
+      throw await makeHttpError(response);
     }
 
     lastScannedEmail = email;
     renderReport(await response.json());
+    resultEl.insertAdjacentHTML("afterbegin", `<p class="notice"><strong>Analyzed message:</strong> ${escapeHtml(email.subject || "(No subject)")}<br>From: ${escapeHtml(email.sender.email)}${useSampleEmail && !window.Office?.context?.mailbox ? "<br><strong>DEMO DATA — not your selected email</strong>" : ""}</p>`);
     statusEl.textContent = "Complete";
   } catch (error) {
     renderError(error);
@@ -93,12 +94,12 @@ async function loadHistory() {
 
   try {
     const apiBaseUrl = await findBackend();
-    const response = await fetch(`${apiBaseUrl}/history`, {
+    const response = await fetchWithTimeout(`${apiBaseUrl}/api/v1/history`, {
       headers: await apiHeaders(false),
-    });
+    }, 30_000);
 
     if (!response.ok) {
-      throw makeHttpError(response.status);
+      throw await makeHttpError(response);
     }
 
     renderHistory(await response.json());
@@ -117,7 +118,7 @@ async function findBackend() {
   // Check backend before sending the email data.
   for (const apiBaseUrl of API_BASE_URLS) {
     try {
-      const response = await fetch(`${apiBaseUrl}/health`, { method: "GET" });
+      const response = await fetchWithTimeout(`${apiBaseUrl}/health/ready`, { method: "GET" }, 20_000);
       if (response.ok) {
         return apiBaseUrl;
       }
@@ -136,14 +137,16 @@ async function findBackend() {
 
 async function getCurrentEmail() {
   await waitForOfficeHost();
-  const item = await waitForCurrentItem();
   const mailbox = window.Office?.context?.mailbox;
 
-  if (!item) {
-    if (useSampleEmail && (!window.Office || !mailbox)) {
-      return sampleEmail();
-    }
+  if (useSampleEmail && !mailbox && !isOutlookHost()) {
+    showSampleMode();
+    return sampleEmail();
+  }
 
+  const item = await waitForCurrentItem();
+
+  if (!item) {
     throw new Error(`Outlook did not expose the selected email to the add-in (${officeDiagnostic()}). Close and reopen this pane.`);
   }
 
@@ -152,10 +155,6 @@ async function getCurrentEmail() {
   }
 
   if (!item.body?.getAsync) {
-    if (useSampleEmail && (!window.Office || !mailbox)) {
-      return sampleEmail();
-    }
-
     throw new Error("Outlook did not provide the email body. Re-open the add-in and scan again.");
   }
 
@@ -183,6 +182,18 @@ async function getCurrentEmail() {
     links,
     attachments: attachmentResult.attachments,
   };
+}
+
+function isOutlookHost() {
+  const host = window.uniphishguardOfficeInfo?.host;
+  const outlook = window.Office?.HostType?.Outlook || "Outlook";
+  return String(host || "").toLowerCase() === String(outlook).toLowerCase()
+    || /^outlook\$/i.test(params.get("_host_Info") || "");
+}
+
+function showSampleMode() {
+  runtimeNoteEl.hidden = false;
+  runtimeNoteEl.textContent = "Browser preview: scanning the built-in sample email. No Outlook message was accessed.";
 }
 
 async function getAttachments(item) {
@@ -245,10 +256,15 @@ async function waitForOfficeHost(timeoutMs = 10000) {
     return;
   }
 
-  await Promise.race([
-    window.uniphishguardOfficeReady,
-    new Promise((resolve) => setTimeout(resolve, timeoutMs)),
-  ]);
+  let timeout;
+  try {
+    await Promise.race([
+      window.uniphishguardOfficeReady,
+      new Promise((resolve) => { timeout = setTimeout(resolve, timeoutMs); }),
+    ]);
+  } finally {
+    clearTimeout(timeout);
+  }
 }
 
 function officeDiagnostic() {
@@ -256,7 +272,8 @@ function officeDiagnostic() {
   const context = Boolean(window.Office?.context);
   const mailbox = Boolean(window.Office?.context?.mailbox);
   const item = Boolean(window.Office?.context?.mailbox?.item);
-  return `Office=${office}, context=${context}, mailbox=${mailbox}, item=${item}`;
+  const host = window.uniphishguardOfficeInfo?.host || "none";
+  return `host=${host}, Office=${office}, context=${context}, mailbox=${mailbox}, item=${item}`;
 }
 
 async function waitForCurrentItem(timeoutMs = 8000) {
@@ -375,13 +392,17 @@ function renderReport(report) {
   const reasons = buildResultReasons(report, checks);
   const reasonItems = renderSimpleList(reasons, "No strong phishing evidence was found.");
   const technicalDetails = renderTechnicalDetails(report, importantIndicators, checks);
+  const incomplete = report.analysis_completeness !== "complete";
+  const limitationItems = renderSimpleList(report.analysis_limitations || [], "");
   const resultSummary = threatLevel.code === "low_risk"
-    ? "No strong phishing evidence was found."
+    ? incomplete
+      ? "No strong phishing evidence was found in the evidence Outlook made available. Some checks were incomplete."
+      : "No strong phishing evidence was found in the inspected evidence."
     : threatLevel.code === "suspicious"
       ? "Some evidence needs verification before you interact with this email."
       : "Multiple strong phishing signals were found.";
 
-  const actions = report.recommended_actions
+  const actions = (report.recommended_actions || [])
     .map((action) => `<li>${escapeHtml(action)}</li>`)
     .join("");
 
@@ -397,18 +418,20 @@ function renderReport(report) {
           <p class="meta">Scan #${escapeHtml(report.scan_id || "-")} ${escapeHtml(report.scanned_at || "")}</p>
           <p class="result-summary">${escapeHtml(resultSummary)}</p>
         </div>
-        <div class="score">${report.risk_score}</div>
+        <div class="score">${escapeHtml(report.risk_score)}</div>
       </div>
 
       <div class="meter-block">
         <div class="meter-row">
-          <span>Threat level</span>
-          <strong>${escapeHtml(threatLevel.label)} - ${report.risk_score}/100</strong>
+          <span>Risk score</span>
+          <strong>${escapeHtml(threatLevel.label)} - ${escapeHtml(report.risk_score)}/100</strong>
         </div>
         <div class="meter">
           <span class="meter-fill risk-fill" style="width: ${clampPercent(report.risk_score)}%; background: ${threatColor}"></span>
         </div>
       </div>
+
+      ${incomplete ? `<div class="notice"><strong>Partial analysis</strong><ul class="list">${limitationItems}</ul></div>` : ""}
 
       <p class="section-title">Why this result</p>
       <ul class="list">${reasonItems}</ul>
@@ -418,16 +441,17 @@ function renderReport(report) {
 
       ${technicalDetails}
 
-      <button class="report-button" type="button" onclick="openItReportDraft()">Report to IT</button>
+      <button id="reportToItButton" class="report-button" type="button">Report to IT</button>
     </article>
   `;
+  document.getElementById("reportToItButton")?.addEventListener("click", openItReportDraft);
 }
 
 function renderHistory(items) {
   const historyItems = items.length
     ? items.map((item) => `
       <li>
-        <p class="history-title">${escapeHtml(item.verdict)} - Risk score ${item.risk_score}/100</p>
+        <p class="history-title">${escapeHtml(item.verdict)} - Risk score ${escapeHtml(item.risk_score)}/100</p>
         <p class="meta">${escapeHtml(item.subject || "(No subject)")}</p>
         <p class="meta">${escapeHtml(item.sender)} - ${escapeHtml(item.scanned_at)}</p>
       </li>
@@ -515,10 +539,12 @@ function renderTechnicalDetails(report, indicators, checks) {
     failed: "Could not be retrieved",
   }[report.authentication_headers_status] || "Not available";
   const detailRows = [
-    ["Final score", `${report.risk_score}/100`],
+    ["Risk score", `${report.risk_score}/100`],
+    ["Analysis completeness", report.analysis_completeness || "partial"],
     ["Verdict", report.verdict],
     ["Threat level", report.threat_level?.label || "Unknown"],
     ["ML phishing probability", `${Math.round((report.ai_confidence || 0) * 100)}%`],
+    ["ML risk impact", `${components.ai_language || 0}`],
     ["Authentication risk impact", `${components.authentication || 0}`],
     ["Sender/rule risk impact", `${components.sender_identity || 0}`],
     ["URL risk impact", `${components.urls || 0}`],
@@ -613,7 +639,7 @@ function sampleEmail() {
     reply_to: "support@adu-help.com",
     body: "Click http://192.168.1.10/login or https://aduniversity-login.com/office to verify your Microsoft 365 password.",
     body_html: '<p>Click <a href="https://aduniversity-login.com/office">ADU Portal</a> to verify your Microsoft 365 password.</p>',
-    headers: "Authentication-Results: mx.example; spf=pass dkim=pass dmarc=fail",
+    headers: "Authentication-Results: spf.protection.outlook.com; spf=pass dkim=pass dmarc=fail",
     headers_status: "checked",
     links: [{ text: "ADU Portal", href: "https://aduniversity-login.com/office" }],
     attachments: [{ name: "invoice.pdf.exe", content_type: "application/octet-stream", size: 42100 }],
@@ -631,12 +657,25 @@ async function apiHeaders(includeJson = true) {
 }
 
 async function getOfficeAccessToken() {
-  if (!Office.context?.auth?.getAccessTokenAsync) {
+  const auth = window.Office?.auth || window.Office?.context?.auth;
+  if (!auth) {
+    return "";
+  }
+
+  if (typeof auth.getAccessToken === "function") {
+    try {
+      return await auth.getAccessToken({ allowSignInPrompt: true, allowConsentPrompt: true });
+    } catch {
+      // Older Outlook clients may only expose the callback API below.
+    }
+  }
+
+  if (typeof auth.getAccessTokenAsync !== "function") {
     return "";
   }
 
   return new Promise((resolve) => {
-    Office.context.auth.getAccessTokenAsync({ allowSignInPrompt: true }, (result) => {
+    auth.getAccessTokenAsync({ allowSignInPrompt: true, allowConsentPrompt: true }, (result) => {
       if (result.status === Office.AsyncResultStatus.Succeeded) {
         resolve(result.value || "");
       } else {
@@ -650,10 +689,37 @@ function getMailboxUser() {
   return Office.context?.mailbox?.userProfile?.emailAddress || "local";
 }
 
-function makeHttpError(status) {
-  const error = new Error(`Backend returned ${status}`);
-  error.status = status;
+async function makeHttpError(response) {
+  let payload = null;
+  try {
+    payload = await response.json();
+  } catch {
+    payload = null;
+  }
+  const detail = payload?.message || payload?.detail?.message || (typeof payload?.detail === "string" ? payload.detail : "");
+  const requestId = response.headers?.get?.("X-Request-ID") || payload?.request_id || "";
+  const suffix = [detail, requestId ? `Request ID: ${requestId}` : ""].filter(Boolean).join(" ");
+  const error = new Error(suffix || `Backend returned ${response.status}`);
+  error.status = response.status;
   return error;
+}
+
+async function fetchWithTimeout(url, options = {}, timeoutMs = 30_000) {
+  if (typeof AbortController === "undefined") {
+    return fetch(url, options);
+  }
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    return await fetch(url, { ...options, signal: controller.signal });
+  } catch (error) {
+    if (error?.name === "AbortError") {
+      throw new Error(`Request timed out after ${Math.round(timeoutMs / 1000)} seconds.`);
+    }
+    throw error;
+  } finally {
+    clearTimeout(timeout);
+  }
 }
 
 function classifyError(error) {
@@ -668,6 +734,9 @@ function classifyError(error) {
   }
   if (/certificate|ssl|tls/i.test(error.message || "")) {
     return { title: "Certificate problem.", message: "Open the backend health URL and accept the local certificate, then scan again.", code: "CERTIFICATE" };
+  }
+  if (/timed out/i.test(error.message || "")) {
+    return { title: "Backend timeout.", message: error.message, code: "BACKEND_TIMEOUT" };
   }
   if (/not reachable|failed to fetch|network/i.test(error.message || "")) {
     return { title: "Backend offline.", message: `Start the backend and check https://localhost:8000/health. ${error.message || ""}`.trim(), code: "BACKEND_OFFLINE" };

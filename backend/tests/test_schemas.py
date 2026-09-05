@@ -50,6 +50,17 @@ def test_unsupported_url_scheme_rejected():
         LinkInfo(href="javascript:alert(1)")
 
 
+@pytest.mark.parametrize("url", [
+    "https://example.com:bad/path",
+    "https://[broken/path",
+    "https:///missing-host",
+    "https://example.com/path\nheader",
+])
+def test_malformed_link_url_rejected(url):
+    with pytest.raises(ValidationError):
+        LinkInfo(href=url)
+
+
 def test_invalid_capability_status_rejected():
     with pytest.raises(ValidationError):
         _email(attachment_content_status="pretend-checked")

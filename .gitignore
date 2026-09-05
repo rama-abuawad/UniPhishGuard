@@ -5,6 +5,7 @@ __pycache__/
 venv/
 .pytest_cache/
 .pytest-tmp/
+.certs/
 .ruff_cache/
 .coverage
 htmlcov/

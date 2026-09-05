@@ -31,6 +31,16 @@ jobs:
       - name: Run frontend tests
         working-directory: outlook-addin
         run: npm test
+      - name: Check frontend JavaScript syntax
+        working-directory: outlook-addin
+        run: node --check taskpane.js && node --check taskpane-utils.js && node --check office-bootstrap.js && node --check configure-production.js
       - name: Validate Outlook manifest
         working-directory: outlook-addin
         run: npm run validate
+      - name: Validate generated production manifest and SSO metadata
+        working-directory: outlook-addin
+        run: |
+          npm run configure:production -- --app-url https://addin.campus.edu --api-url https://api.campus.edu --client-id ffffffff-ffff-ffff-ffff-ffffffffffff
+          npx office-addin-manifest validate dist/manifest.xml
+          if (-not (Test-Path dist/addin/taskpane.html)) { throw "Production task pane was not generated." }
+          if (-not (Test-Path dist/addin/config.js)) { throw "Production API configuration was not generated." }

@@ -431,6 +431,19 @@ h1 {
   padding: 12px;
 }
 
+.notice {
+  background: #fff8e8;
+  border: 1px solid #e7c66a;
+  border-radius: 8px;
+  color: #654b00;
+  margin-top: 12px;
+  padding: 10px;
+}
+
+.notice .list {
+  margin-top: 8px;
+}
+
 .runtime-note {
   color: #637083;
   font-size: 12px;
