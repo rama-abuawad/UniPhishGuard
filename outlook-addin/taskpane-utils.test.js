@@ -18,11 +18,23 @@ test("accepts base64 attachment content and rejects non-base64 formats", () => {
   assert.equal(utils.base64Content({ format: "Eml", content: "YWJj" }), null);
 });
 test("maps verdict classes", () => assert.equal(utils.verdictClassName("Suspicious"), "verdict-suspicious"));
-test("report omits AI-only indicators", () => {
-  const text = utils.buildReportText({ verdict: "Suspicious", risk_score: 40, ai_confidence: 0.99, threat_level: { label: "Suspicious" }, threat_categories: [], indicators: [{ code: "ai_phishing_signal", severity: "medium", message: "hidden" }] });
-  assert.equal(text.includes("hidden"), false);
-  assert.equal(text.includes("ML phishing probability"), false);
-  assert.equal(text.includes("99%"), false);
+test("exported report retains the text-model reason for a warning", () => {
+  const text = utils.buildReportText({ verdict: "Likely phishing", risk_score: 55, threat_level: { label: "High Risk" }, indicators: [{ code: "ai_phishing_signal", severity: "high", message: "AI text analysis found phishing-like wording." }] });
+  assert.match(text, /AI text analysis found phishing-like wording/);
+  assert.equal(text.includes("No major indicators found"), false);
+});
+
+test("all URL warning codes are reflected in link status", () => {
+  for (const code of ["url_university_account_external", "encoded_url", "punycode_domain", "suspicious_url_domain"]) {
+    const status = utils.inspectionStatuses({ indicators: [{ code, severity: "medium" }] })[1];
+    assert.equal(status.tone, "warning", code);
+  }
+});
+
+test("an unmatched URL rule does not claim destination safety", () => {
+  const status = utils.inspectionStatuses({ indicators: [] })[1];
+  assert.equal(status.tone, "neutral");
+  assert.match(status.value, /destination safety was not verified/);
 });
 test("untrusted authentication is never shown as passed", () => {
   const status = utils.inspectionStatuses({ authentication_status: "untrusted", indicators: [] })[0];

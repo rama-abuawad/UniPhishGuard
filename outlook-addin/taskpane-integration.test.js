@@ -16,6 +16,36 @@ function element() {
   };
 }
 
+test("phishing report explains model evidence instead of reassuring fallback reasons", () => {
+  const elements = new Map(["scanButton", "historyButton", "result", "connectionStatus", "runtimeNote"].map(id => [id, element()]));
+  const context = {
+    URLSearchParams, setTimeout, clearTimeout, AbortController,
+    window: { location: { search: "", pathname: "/addin/taskpane.html", origin: "https://localhost:8000" }, UniPhishGuardUtils: utils },
+    document: { getElementById: id => elements.get(id) || null },
+  };
+  vm.createContext(context);
+  vm.runInContext(fs.readFileSync("taskpane.js", "utf8"), context);
+  context.report = {
+    verdict: "Likely phishing", risk_score: 55, ai_prediction: "phishing", ai_confidence: 0.998,
+    top_reasons: ["AI text analysis found phishing-like wording (100%).", "AI noticed: account"],
+    indicators: [{ code: "ai_phishing_signal", severity: "high", message: "AI text analysis found phishing-like wording (100%)." }],
+    attachment_content_status: "checked",
+  };
+  const reasons = vm.runInContext("buildResultReasons(report, buildCheckStatuses(report))", context);
+  assert.match(reasons[0], /AI text analysis/);
+  assert.equal(reasons.some(reason => /No suspicious|No known/.test(reason)), false);
+  vm.runInContext("renderReport(report)", context);
+  assert.match(elements.get("result").innerHTML, /AI text analysis found phishing-like wording/);
+
+  // Authenticated senders may lack an AI indicator while the score still
+  // includes the model. They also need an explanation of the warning.
+  context.report.indicators = [];
+  assert.match(vm.runInContext("buildResultReasons(report, [])[0]", context), /AI text analysis/);
+
+  context.report.top_reasons = ["University account link opens outside.example, outside approved domains."];
+  assert.match(vm.runInContext("buildResultReasons(report, [])[0]", context), /outside.example/);
+});
+
 test("sample requires explicit opt-in; missing mailbox never silently scans demo data", async () => {
   const elements = new Map(
     ["scanButton", "historyButton", "result", "connectionStatus", "runtimeNote"].map((id) => [id, element()]),

@@ -400,7 +400,7 @@ function renderReport(report) {
       : "No strong phishing evidence was found in the inspected evidence."
     : threatLevel.code === "suspicious"
       ? "Some evidence needs verification before you interact with this email."
-      : "Multiple strong phishing signals were found.";
+      : "The combined evidence indicates a high phishing risk. Review the reasons below.";
 
   const actions = (report.recommended_actions || [])
     .map((action) => `<li>${escapeHtml(action)}</li>`)
@@ -508,16 +508,26 @@ function buildResultReasons(report, checks) {
     return [...new Set(ruleReasons)].slice(0, 3);
   }
 
+  // A warning driven by the text model must explain that evidence, not fall
+  // back to reassuring statements about unrelated checks.
+  if (normalizeThreatLevel(report).code !== "low_risk") {
+    const aiSignal = (report.indicators || []).find((indicator) => indicator.code === "ai_phishing_signal");
+    if (aiSignal) return [aiSignal.message];
+    if (report.ai_prediction === "phishing") {
+      return ["AI text analysis identified phishing-like wording in this email. This is a model assessment, not a confirmed malicious link."];
+    }
+    return ["The combined evidence raised the risk score. Review the detailed findings before interacting with this email."];
+  }
+
   const reasons = [];
   const authentication = checks.find((check) => check.label === "Sender authentication");
   if (authentication?.value === "Passed") reasons.push("Sender authentication passed.");
-  if (checks.find((check) => check.label === "Links")?.value.startsWith("No suspicious")) reasons.push("No suspicious link pattern was detected.");
+  if (checks.find((check) => check.label === "Links")?.value.startsWith("No known")) reasons.push("No known URL warning pattern matched; destination safety was not verified.");
   if (checks.find((check) => check.label === "Attachments")?.value.startsWith("No suspicious")) reasons.push("No suspicious attachment pattern was detected.");
   return reasons.slice(0, 3);
 }
 
 function renderTechnicalDetails(report, indicators, checks) {
-  indicators = indicators.filter((indicator) => indicator.code !== "ai_phishing_signal");
   const headerIndicatorCodes = /^(?:auth_|spf_|dkim_|dmarc_|forwarding_or_arc_context$|reply_to_mismatch$)/;
   const headerIndicators = indicators.filter((indicator) => headerIndicatorCodes.test(indicator.code));
   const otherIndicators = indicators.filter((indicator) => !headerIndicatorCodes.test(indicator.code));

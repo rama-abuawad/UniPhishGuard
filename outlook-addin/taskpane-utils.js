@@ -52,9 +52,10 @@
     }[report.authentication_status] || { value: "Not available", tone: "neutral" };
     const attachmentWarning = important("attachment", "double_extension", "dangerous_attachment", "macro_", "archive_", "zip_", "qr_");
     const attachmentAvailability = report.attachment_content_status || "not_requested";
+    const linkWarning = important("url_", "link_", "approved_domain", "encoded_url", "punycode_domain", "suspicious_url_domain");
     return [
       { label: "Sender authentication", ...authentication },
-      { label: "Links", value: important("url_", "link_", "approved_domain") ? "Suspicious patterns detected" : "No suspicious link patterns detected", tone: important("url_", "link_", "approved_domain") ? "warning" : "safe" },
+      { label: "Links", value: linkWarning ? "Suspicious patterns detected" : "No known URL warning pattern matched; destination safety was not verified", tone: linkWarning ? "warning" : "neutral" },
       {
         label: "Attachments",
         value: attachmentWarning ? "Suspicious patterns detected" : attachmentAvailability === "checked" ? "No suspicious attachment patterns detected" : attachmentAvailability === "partial" ? "Partially inspected" : "Content inspection unavailable",
@@ -68,7 +69,7 @@
     const categories = (report.threat_categories || []).length
       ? report.threat_categories.map((category) => `- ${category.label} (${categoryEvidence(category)} evidence)`).join("\n")
       : "- No specific category detected";
-    const important = (report.indicators || []).filter((indicator) => indicator.code !== "ai_phishing_signal" && ["high", "medium"].includes(indicator.severity));
+    const important = (report.indicators || []).filter((indicator) => ["high", "medium"].includes(indicator.severity));
     const indicators = important.length ? important.map((indicator) => `- ${indicator.message}`).join("\n") : "- No major indicators found";
     const completeness = report.analysis_completeness || "partial";
     const limitations = (report.analysis_limitations || []).map((item) => `- ${item}`).join("\n") || "- None reported";

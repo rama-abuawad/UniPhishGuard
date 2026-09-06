@@ -359,6 +359,15 @@ def _check_authentication_results(headers: str, status: str = "checked", visible
 def _check_urls(email: EmailAnalysisRequest, links: list[LinkInfo]) -> list[Indicator]:
     urls = {link.href for link in links}
     indicators: list[Indicator] = []
+    university_account_action = _requests_university_account_action(email)
+    # Ignore infrastructure/help links when identifying a single action target,
+    # but keep approved university links so a footer link is not mistaken for
+    # the action when the message also points to the real university portal.
+    action_candidates = {
+        link.href for link in links
+        if not _is_common_hosting_domain(_normalize_host(urlparse(link.href).hostname or ""))
+        and _normalize_host(urlparse(link.href).hostname or "") != "aka.ms"
+    }
 
     for link in links:
         url = _clean_url(link.href)
@@ -397,6 +406,26 @@ def _check_urls(email: EmailAnalysisRequest, links: list[LinkInfo]) -> list[Indi
                     )
                 )
             continue
+
+        action_label = URL_RE.sub(" ", link.text)
+        action_destination = f"{host} {parsed.path} {action_label}"
+        looks_like_account_link = bool(re.search(
+            r"\b(?:account|login|signin|sign in|log in|verify|verification|confirm|validate|unlock)\b",
+            action_destination, re.IGNORECASE,
+        ))
+        if host and host != "aka.ms" and university_account_action and (
+            looks_like_account_link or action_candidates == {link.href}
+        ):
+            indicators.append(
+                Indicator(
+                    code="url_university_account_external",
+                    severity="medium",
+                    message=(
+                        "Email requests action on a university account, but the link destination "
+                        f"is outside the approved university domains: {host}."
+                    ),
+                )
+            )
 
         if parsed.username or parsed.password:
             indicators.append(
@@ -468,6 +497,23 @@ def _check_urls(email: EmailAnalysisRequest, links: list[LinkInfo]) -> list[Indi
         )
 
     return indicators
+
+
+def _requests_university_account_action(email: EmailAnalysisRequest) -> bool:
+    # Inspect visible prose, not URL tokens or sender display names. Ordinary
+    # university announcements with external links are not account requests.
+    text = URL_RE.sub(" ", " ".join([
+        email.subject, _strip_html(email.body), _strip_html(email.body_html or ""),
+    ])).lower()
+    university_context = bool(re.search(r"\b(?:university|student|campus)\s+account\b", text)) or any(
+        _contains_term(text, term) for term in UNIVERSITY_BRAND_TERMS
+    )
+    account_request = bool(re.search(
+        r"\b(?:review|verify|confirm|update|validate|restore|unlock)\s+your\s+"
+        r"(?:(?:university|student|campus)\s+)?account\b", text,
+    )) or bool(re.search(r"\b(?:sign in|log in|login)\s+to\s+(?:your\s+)?"
+                         r"(?:(?:university|student|campus)\s+)?account\b", text))
+    return university_context and account_request
 
 
 def _deduplicate_indicators(indicators: list[Indicator]) -> list[Indicator]:
@@ -944,6 +990,11 @@ def _score(
             ai_score = max(ai_score, SCORING_CONFIG["verdict_thresholds"]["phishing"])
         elif ai_confidence >= 0.90:
             ai_score = max(ai_score, SCORING_CONFIG["verdict_thresholds"]["suspicious"])
+        elif not corroborated:
+            # Moderate text-model confidence alone is not enough to label an
+            # ordinary notice suspicious. Keep the prediction visible, but
+            # require independent evidence before crossing the warning threshold.
+            ai_score = min(ai_score, SCORING_CONFIG["verdict_thresholds"]["suspicious"] - 1)
         # Verified organization mail controls ordinary-notice false positives,
         # but never cancels corroborating technical evidence or a very-high-
         # confidence text result.
@@ -1195,7 +1246,14 @@ def _final_extension(name: str) -> str:
 
 
 def _mime_extension_mismatch(ext: str, content_type: str) -> bool:
+    content_type = content_type.split(";", 1)[0].strip().lower()
+    # A generic binary MIME type says the sender/client did not identify the
+    # format. It is not evidence that the named file has a different format.
+    if content_type in {"application/octet-stream", "application/x-octet-stream", "binary/octet-stream"}:
+        return False
     if not content_type or not ext:
+        return False
+    if ext == ".pdf" and content_type == "application/x-pdf":
         return False
     expected = {
         ".pdf": "application/pdf",
